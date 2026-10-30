@@ -15,22 +15,97 @@ import {
 import { useAction, useAsync } from "./hooks";
 import { CONTRIBUTION_LABEL, formatDate } from "./labels";
 
-function RegisterPanel({ onDone }: { onDone?: () => void }) {
-  const { login } = useAuth();
+function ProfileModal({ onClose }: { onClose: () => void }) {
+  const { user, updateProfile } = useAuth();
   const { data: meta } = useAsync(() => api.getMeta(), []);
-  const [handle, setHandle] = useState("ゲスト参加者");
-  const [attrs, setAttrs] = useState<Record<string, string>>({});
+  const [handle, setHandle] = useState(user?.handle ?? "参加者");
+  const [attrs, setAttrs] = useState<Record<string, string>>(user?.attributes ?? {});
   const { busy, error, exec } = useAction();
 
   const submit = () =>
     exec(async () => {
-      const res = await api.createUser(handle.trim() || "匿名参加者", attrs);
-      login(res.user, res.token);
+      await updateProfile(handle.trim() || "匿名参加者", attrs);
+      onClose();
+    });
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content card" style={{ maxWidth: 520, margin: "auto" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.85rem" }}>
+          <h3 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 800 }}>👤 プロフィールの変更</h3>
+          <button type="button" className="btn btn-sm" onClick={onClose}>✕</button>
+        </div>
+        <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginBottom: "1rem" }}>
+          あなたの投票履歴や参加データ（ID）を維持したまま、表示名や属性を更新できます。
+        </p>
+
+        <div style={{ marginBottom: "1rem" }}>
+          <label style={{ fontSize: "0.85rem", fontWeight: 800, display: "block", marginBottom: "0.35rem" }}>
+            表示名（ニックネーム）
+          </label>
+          <input
+            className="input"
+            value={handle}
+            onChange={(e) => setHandle(e.target.value)}
+            placeholder="例：教員A / 学生B"
+          />
+        </div>
+
+        {meta?.attributes.map((a) => (
+          <div key={a.key} style={{ marginBottom: "0.75rem" }}>
+            <label style={{ fontSize: "0.85rem", fontWeight: 800, display: "block", marginBottom: "0.35rem" }}>
+              {a.label}（任意）
+            </label>
+            <select
+              className="select"
+              value={attrs[a.key] ?? ""}
+              onChange={(e) => setAttrs({ ...attrs, [a.key]: e.target.value })}
+            >
+              <option value="">選択しない（スキップ）</option>
+              {a.options.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </div>
+        ))}
+
+        {error && <div className="error-box" style={{ marginBottom: "0.75rem" }}>{error}</div>}
+
+        <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+          <button type="button" className="btn" onClick={onClose}>キャンセル</button>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={submit}>
+            {busy ? "保存中…" : "変更を保存する"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RegisterPanel({ onDone }: { onDone?: () => void }) {
+  const { user, updateProfile, login } = useAuth();
+  const { data: meta } = useAsync(() => api.getMeta(), []);
+  const [handle, setHandle] = useState(user?.handle && user.handle !== "ゲスト参加者" ? user.handle : "");
+  const [attrs, setAttrs] = useState<Record<string, string>>(user?.attributes ?? {});
+  const { busy, error, exec } = useAction();
+
+  const submit = () =>
+    exec(async () => {
+      const cleanHandle = handle.trim() || (user?.handle && user.handle !== "ゲスト参加者" ? user.handle : "匿名参加者");
+      if (user) {
+        // すでに端末アカウントがある場合は同一IDのまま更新（多重参加を完全防止）
+        await updateProfile(cleanHandle, attrs);
+      } else {
+        const res = await api.createUser(cleanHandle, attrs);
+        login(res.user, res.token);
+      }
       onDone?.();
     });
 
   return (
-    <div className="card" style={{ borderLeft: "4px solid var(--brand-blue)", background: "#ffffff" }}>
+    <div className="card" style={{ borderLeft: "4px solid var(--brand-blue)", background: "#ffffff", marginBottom: "1rem" }}>
       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.4rem" }}>
         <span style={{ fontSize: "1.2rem" }}>👤</span>
         <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 800, color: "var(--text-main)" }}>
@@ -444,9 +519,21 @@ function TopicDetailPage() {
           {topic.title}
         </h1>
 
-        <p style={{ margin: 0, color: "var(--text-body)", fontSize: "0.92rem", lineHeight: 1.6 }}>
+        <p style={{ margin: "0 0 0.75rem", color: "var(--text-body)", fontSize: "0.92rem", lineHeight: 1.6 }}>
           {topic.description}
         </p>
+
+        {user && (
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.2)", borderRadius: "var(--radius-pill)", padding: "0.3rem 0.85rem", fontSize: "0.82rem", fontWeight: 700, color: "var(--brand-blue)" }}>
+            <span>👤 あなた（{user.handle}）として参加中</span>
+            <span>・</span>
+            <span>
+              {topic.my_progress.voted === topic.my_progress.total && topic.my_progress.total > 0
+                ? "✓ 全問投票完了"
+                : `${topic.my_progress.voted} / ${topic.my_progress.total} 問 投票済み`}
+            </span>
+          </div>
+        )}
 
         {/* Export Actions for Participants & Admins */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.6rem", marginTop: "1rem", paddingTop: "0.85rem", borderTop: "1px solid var(--border-subtle)" }}>
@@ -685,42 +772,37 @@ function ContributionsPage() {
 }
 
 function Header() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const location = useLocation();
+  const [showProfileModal, setShowProfileModal] = useState(false);
 
   return (
-    <header className="app-header">
-      <div className="app-header-inner">
-        <Link to="/" className="brand">
-          <div className="brand-icon">成</div>
-          <span>成果型SNS</span>
-          <span className="brand-badge">Polis × 原体験</span>
-        </Link>
-        <nav className="nav-links">
-          <Link to="/" className={`nav-item ${location.pathname === "/" ? "active" : ""}`}>
-            トピック一覧
+    <>
+      <header className="app-header">
+        <div className="app-header-inner">
+          <Link to="/" className="brand">
+            <div className="brand-icon">成</div>
+            <span>成果型SNS</span>
+            <span className="brand-badge">Polis × 原体験</span>
           </Link>
-          <Link to="/contributions" className={`nav-item ${location.pathname === "/contributions" ? "active" : ""}`}>
-            自分の貢献
-          </Link>
-          {user ? (
-            <div className="nav-user-pill">
-              <span>👤 {user.handle}</span>
-              <button
-                type="button"
-                className="btn btn-sm"
-                style={{ padding: "0.15rem 0.5rem", fontSize: "0.76rem" }}
-                onClick={logout}
-              >
-                切替
-              </button>
-            </div>
-          ) : (
-            <span className="badge">未登録</span>
-          )}
-        </nav>
-      </div>
-    </header>
+          <nav className="nav-links">
+            <Link to="/" className={`nav-item ${location.pathname === "/" ? "active" : ""}`}>
+              トピック一覧
+            </Link>
+            <Link to="/contributions" className={`nav-item ${location.pathname === "/contributions" ? "active" : ""}`}>
+              自分の貢献
+            </Link>
+            {user && (
+              <div className="nav-user-pill" style={{ cursor: "pointer" }} onClick={() => setShowProfileModal(true)}>
+                <span>👤 {user.handle}</span>
+                <span style={{ fontSize: "0.75rem", color: "var(--brand-blue)", fontWeight: 700 }}>✏️ 変更</span>
+              </div>
+            )}
+          </nav>
+        </div>
+      </header>
+      {showProfileModal && <ProfileModal onClose={() => setShowProfileModal(false)} />}
+    </>
   );
 }
 

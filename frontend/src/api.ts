@@ -202,6 +202,19 @@ export type Report = {
 
 // ---------- 通信の土台 ----------
 const TOKEN_KEY = "seika_sns_token";
+const DEVICE_KEY = "seika_sns_device_id";
+
+export function getDeviceId(): string {
+  let devId = localStorage.getItem(DEVICE_KEY);
+  if (!devId) {
+    devId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `dev_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+    localStorage.setItem(DEVICE_KEY, devId);
+  }
+  return devId;
+}
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -303,8 +316,14 @@ export function errorMessage(e: unknown): string {
 export const api = {
   // ユーザー・メタ
   getMeta: () => request<Meta>("GET", "/meta"),
-  createUser: (handle: string, attributes: Record<string, string>) =>
-    request<{ user: User; token: string }>("POST", "/users", { handle, attributes }),
+  createUser: (handle: string, attributes: Record<string, string>, deviceId?: string) =>
+    request<{ user: User; token: string }>("POST", "/users", {
+      handle,
+      attributes,
+      device_id: deviceId ?? getDeviceId(),
+    }),
+  updateMe: (handle: string, attributes: Record<string, string>) =>
+    request<User>("PUT", "/me", { handle, attributes }),
   getMe: () => request<User>("GET", "/me"),
   getContributions: () => request<Contribution[]>("GET", "/me/contributions"),
 

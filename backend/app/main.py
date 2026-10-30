@@ -201,6 +201,7 @@ def _statement_brief(db: Session, st: Statement, user: User | None) -> dict[str,
 class CreateUserReq(BaseModel):
     handle: str = Field(min_length=1, max_length=50)
     attributes: dict[str, str] = Field(default_factory=dict)
+    device_id: str | None = None
 
 
 class SuggestAxesReq(BaseModel):
@@ -266,11 +267,44 @@ def api_meta():
 
 @app.post("/api/users")
 def api_create_user(req: CreateUserReq, db: Session = Depends(get_db)):
+    # 端末識別子（device_id）がある場合、既存ユーザーがいれば同一人物として復元・更新
+    existing_user: User | None = None
+    if req.device_id:
+        existing_user = db.scalars(
+            select(User).where(User.device_id == req.device_id)
+        ).first()
+
+    valid_keys = {a["key"] for a in META_ATTRIBUTES}
+
+    if existing_user:
+        # 既存ユーザーの情報を更新して同一参加者として返す（多重ユーザーの作成を完全防止）
+        if req.handle.strip() and req.handle.strip() != "ゲスト参加者":
+            existing_user.handle = req.handle.strip()
+        for k, v in req.attributes.items():
+            if k in valid_keys:
+                attr = db.scalars(
+                    select(UserAttribute).where(
+                        UserAttribute.user_id == existing_user.id, UserAttribute.key == k
+                    )
+                ).first()
+                if attr:
+                    attr.value = v
+                elif v:
+                    db.add(UserAttribute(user_id=existing_user.id, key=k, value=v))
+        db.commit()
+        db.refresh(existing_user)
+        return {"user": _serialize_user(existing_user), "token": existing_user.token}
+
     token = secrets.token_hex(24)
-    u = User(handle=req.handle.strip(), token=token, trust_level=1, is_synthetic=False)
+    u = User(
+        handle=req.handle.strip(),
+        token=token,
+        device_id=req.device_id,
+        trust_level=1,
+        is_synthetic=False,
+    )
     db.add(u)
     db.flush()
-    valid_keys = {a["key"] for a in META_ATTRIBUTES}
     for k, v in req.attributes.items():
         if k in valid_keys and v:
             db.add(UserAttribute(user_id=u.id, key=k, value=v))
@@ -281,6 +315,32 @@ def api_create_user(req: CreateUserReq, db: Session = Depends(get_db)):
 
 @app.get("/api/me")
 def api_get_me(user: User = Depends(get_current_user)):
+    return _serialize_user(user)
+
+
+@app.put("/api/me")
+def api_update_me(
+    req: CreateUserReq,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """同一ユーザーIDを保持したままプロフィール情報を更新する。"""
+    if req.handle.strip():
+        user.handle = req.handle.strip()
+    valid_keys = {a["key"] for a in META_ATTRIBUTES}
+    for k, v in req.attributes.items():
+        if k in valid_keys:
+            attr = db.scalars(
+                select(UserAttribute).where(
+                    UserAttribute.user_id == user.id, UserAttribute.key == k
+                )
+            ).first()
+            if attr:
+                attr.value = v
+            elif v:
+                db.add(UserAttribute(user_id=user.id, key=k, value=v))
+    db.commit()
+    db.refresh(user)
     return _serialize_user(user)
 
 

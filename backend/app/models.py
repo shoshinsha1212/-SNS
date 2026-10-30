@@ -27,6 +27,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     handle: Mapped[str] = mapped_column(String(50))
     token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    device_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     trust_level: Mapped[int] = mapped_column(Integer, default=1)
     is_synthetic: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

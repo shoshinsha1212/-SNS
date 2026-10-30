@@ -47,6 +47,14 @@ def get_db():
 
 
 def init_db() -> None:
+    from sqlalchemy import text
     from . import models  # noqa: F401  モデルを登録するため
 
     Base.metadata.create_all(engine)
+    if _is_sqlite and not _is_memory:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE users ADD COLUMN device_id VARCHAR(64)"))
+                conn.commit()
+            except Exception:
+                pass

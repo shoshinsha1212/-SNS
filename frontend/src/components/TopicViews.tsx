@@ -266,16 +266,19 @@ export function VoteTab({
           <h2 style={{ fontSize: "1.35rem", fontWeight: 800, margin: "0.5rem 0" }}>
             すべての原則への投票が完了しました！
           </h2>
-          <p style={{ color: "var(--text-muted)", fontSize: "0.95rem", maxWidth: 460, margin: "0 auto 1.5rem" }}>
-            ご協力ありがとうございます。あなたの1票によって、立場ごとの分岐点と共通合意が可視化されました。
+          <p style={{ color: "var(--text-muted)", fontSize: "0.95rem", maxWidth: 460, margin: "0 auto 1rem", lineHeight: 1.6 }}>
+            ご協力ありがとうございます。あなたの投票は記録され、最新の1票として統計と意見マップに反映されています。
           </p>
+          <div style={{ background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.2)", borderRadius: "var(--radius-md)", padding: "0.75rem 1rem", maxWidth: 480, margin: "0 auto 1.5rem", fontSize: "0.85rem", color: "var(--brand-blue)" }}>
+            ℹ️ あなたの投票は重複せず、回答を変更した場合は最新の内容に上書き更新されます。
+          </div>
           <div style={{ display: "flex", justifyContent: "center", gap: "0.75rem", flexWrap: "wrap" }}>
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn"
               onClick={() => setCurrentIndex(0)}
             >
-              もう一度回答を見直す
+              回答を見直す・修正する
             </button>
           </div>
         </div>
