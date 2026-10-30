@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, String
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -558,8 +558,16 @@ def seed_additional_12_topics(db: Session, users: list[User]) -> None:
             select(PositionAxis).where(PositionAxis.topic_id == topic.id).order_by(PositionAxis.order.asc())
         ).all()
 
-        has_votes = db.scalar(select(func.count(VoteEvent.id)).where(VoteEvent.topic_id == topic.id)) or 0
-        if has_votes < 20:
+        # position_snapshot に axis: が含まれる有効投票をカウントし、不足していれば再投票
+        has_valid_votes = db.scalar(
+            select(func.count(VoteEvent.id)).where(
+                VoteEvent.topic_id == topic.id,
+                VoteEvent.position_snapshot.cast(String).contains("axis:")
+            )
+        ) or 0
+        if has_valid_votes < 20:
+            db.execute(delete(VoteEvent).where(VoteEvent.topic_id == topic.id))
+            db.flush()
             for u_idx, u in enumerate(users):
                 pos_map = {}
                 for ax_idx, axis in enumerate(axes):
@@ -568,7 +576,7 @@ def seed_additional_12_topics(db: Session, users: list[User]) -> None:
                     ).all()
                     if opts:
                         chosen_opt = opts[(u_idx + ax_idx * 2) % len(opts)]
-                        pos_map[axis.name] = chosen_opt.label
+                        pos_map[f"axis:{axis.id}"] = chosen_opt.label
                         existing_pos = db.scalars(
                             select(UserTopicPosition).where(
                                 UserTopicPosition.user_id == u.id,
@@ -585,6 +593,9 @@ def seed_additional_12_topics(db: Session, users: list[User]) -> None:
                             ))
                 db.flush()
 
+                # ユーザーのトピック固有立場および属性スナップショットを完全取得
+                u_topic_snap = get_user_position_snapshot(db, u.id, topic.id)
+
                 for s_order, sid in enumerate(stmt_ids):
                     if s_order == 0:
                         val = 1 if (u_idx % 10 != 0) else -1
@@ -600,7 +611,7 @@ def seed_additional_12_topics(db: Session, users: list[User]) -> None:
                         statement_id=sid,
                         topic_id=topic.id,
                         value=val,
-                        position_snapshot=pos_map,
+                        position_snapshot=u_topic_snap,
                     ))
             db.flush()
 
