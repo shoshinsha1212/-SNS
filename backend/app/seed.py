@@ -37,6 +37,7 @@ from .models import (
     VoteEvent,
     utcnow,
 )
+from .seed_topics_data import NEW_TOPICS_SPECS, PERSONA_CONTRIBUTIONS
 from .services.analysis_service import get_user_position_snapshot, run_analysis
 
 INITIAL_STATEMENTS: list[tuple[str, str, list[float]]] = [
@@ -497,15 +498,207 @@ def seed_4days_32personas(db: Session, topic: Topic) -> None:
     run_analysis(db, topic.id)
     print("32名×4日間の実テストデータ投入および最新合意形成レポート (v2.0) の編纂が完了しました。")
 
+    # 新規12トピックおよび32名のターゲット別原体験・意見の永続化
+    seed_additional_12_topics(db, users)
+
+
+def seed_additional_12_topics(db: Session, users: list[User]) -> None:
+    """12個の新規トピックおよび32名それぞれの属性に応じた原体験ストーリー・意見を永続化する。"""
+    existing_topics = db.scalars(select(Topic)).all()
+    existing_map = {t.title: t for t in existing_topics}
+    user_by_handle = {u.handle: u for u in users}
+
+    all_created_topics = []
+
+    for spec in NEW_TOPICS_SPECS:
+        topic = existing_map.get(spec["title"])
+        if not topic:
+            topic = Topic(
+                title=spec["title"],
+                description=spec["description"],
+                created_by=users[0].id,
+            )
+            db.add(topic)
+            db.flush()
+
+            for axis_order, ax_spec in enumerate(spec["axes"]):
+                axis = PositionAxis(
+                    topic_id=topic.id,
+                    name=ax_spec["name"],
+                    order=axis_order,
+                )
+                db.add(axis)
+                db.flush()
+                for opt_label in ax_spec["options"]:
+                    db.add(PositionOption(
+                        axis_id=axis.id,
+                        label=opt_label,
+                    ))
+            db.flush()
+
+            for st_text in spec["statements"]:
+                st_obj = Statement(
+                    topic_id=topic.id,
+                    body=st_text,
+                    origin="seed",
+                    author_id=users[0].id,
+                )
+                db.add(st_obj)
+            db.flush()
+        
+        all_created_topics.append(topic)
+
+    for topic in all_created_topics:
+        stmts = db.scalars(
+            select(Statement).where(Statement.topic_id == topic.id, Statement.status == "active")
+        ).all()
+        stmt_ids = [s.id for s in stmts]
+
+        axes = db.scalars(
+            select(PositionAxis).where(PositionAxis.topic_id == topic.id).order_by(PositionAxis.order.asc())
+        ).all()
+
+        has_votes = db.scalar(select(func.count(VoteEvent.id)).where(VoteEvent.topic_id == topic.id)) or 0
+        if has_votes < 20:
+            for u_idx, u in enumerate(users):
+                pos_map = {}
+                for ax_idx, axis in enumerate(axes):
+                    opts = db.scalars(
+                        select(PositionOption).where(PositionOption.axis_id == axis.id).order_by(PositionOption.id.asc())
+                    ).all()
+                    if opts:
+                        chosen_opt = opts[(u_idx + ax_idx * 2) % len(opts)]
+                        pos_map[axis.name] = chosen_opt.label
+                        existing_pos = db.scalars(
+                            select(UserTopicPosition).where(
+                                UserTopicPosition.user_id == u.id,
+                                UserTopicPosition.topic_id == topic.id,
+                                UserTopicPosition.axis_id == axis.id
+                            )
+                        ).first()
+                        if not existing_pos:
+                            db.add(UserTopicPosition(
+                                user_id=u.id,
+                                topic_id=topic.id,
+                                axis_id=axis.id,
+                                option_id=chosen_opt.id
+                            ))
+                db.flush()
+
+                for s_order, sid in enumerate(stmt_ids):
+                    if s_order == 0:
+                        val = 1 if (u_idx % 10 != 0) else -1
+                    elif s_order in (1, 4):
+                        val = 1 if (u_idx % 2 == 0) else -1
+                    elif s_order == 2:
+                        val = 1 if (u_idx % 3 != 0) else -1
+                    else:
+                        val = 1 if ((u_idx + s_order) % 4 != 0) else 0
+                    
+                    db.add(VoteEvent(
+                        user_id=u.id,
+                        statement_id=sid,
+                        topic_id=topic.id,
+                        value=val,
+                        position_snapshot=pos_map,
+                    ))
+            db.flush()
+
+    for contrib in PERSONA_CONTRIBUTIONS:
+        handle = contrib["handle"]
+        u = user_by_handle.get(handle)
+        if not u:
+            continue
+        keyword = contrib["target_topic_keyword"]
+
+        matched_topic = None
+        for t in all_created_topics:
+            if keyword in t.title or (t.description and keyword in t.description):
+                matched_topic = t
+                break
+        if not matched_topic:
+            continue
+
+        u_snap = get_user_position_snapshot(db, u.id, matched_topic.id)
+
+        opinion_text = contrib["opinion_statement"]
+        existing_st = db.scalars(
+            select(Statement).where(Statement.topic_id == matched_topic.id, Statement.body == opinion_text)
+        ).first()
+        if not existing_st:
+            existing_st = Statement(
+                topic_id=matched_topic.id,
+                body=opinion_text,
+                origin="user",
+                author_id=u.id,
+            )
+            db.add(existing_st)
+            db.flush()
+
+            for other_u in users[:16]:
+                if other_u.id != u.id:
+                    o_snap = get_user_position_snapshot(db, other_u.id, matched_topic.id)
+                    db.add(VoteEvent(
+                        user_id=other_u.id,
+                        statement_id=existing_st.id,
+                        topic_id=matched_topic.id,
+                        value=1,
+                        position_snapshot=o_snap,
+                    ))
+
+        story_summary = contrib["story_summary"]
+        existing_story = db.scalars(
+            select(Story).where(Story.author_id == u.id, Story.summary == story_summary)
+        ).first()
+        if not existing_story:
+            story = Story(
+                author_id=u.id,
+                topic_id=matched_topic.id,
+                kind="present",
+                summary=story_summary,
+                body=contrib["story_body"],
+                anonymization="none",
+                position_snapshot=u_snap,
+            )
+            db.add(story)
+            db.flush()
+
+            db.add(StoryStatementLink(
+                story_id=story.id,
+                statement_id=existing_st.id,
+                stance="supports",
+            ))
+            db.flush()
+
+            for o_idx, other_u in enumerate(users[:8]):
+                if other_u.id != u.id:
+                    rx_kind = "resonate" if o_idx % 2 == 0 else "understand"
+                    o_snap = get_user_position_snapshot(db, other_u.id, matched_topic.id)
+                    db.add(StoryReaction(
+                        user_id=other_u.id,
+                        story_id=story.id,
+                        kind=rx_kind,
+                        position_snapshot=o_snap,
+                    ))
+            db.flush()
+
+    db.commit()
+
+    for t in all_created_topics:
+        run_analysis(db, t.id)
+    print("全12トピックのシードおよびペルソナストーリー反映、合意形成レポート編纂が完了しました。")
+
 
 def ensure_seeded(db: Session) -> None:
     """起動時にトピック＆初期論点を整備し、32名×4日間のテスト実データを永続化する。"""
     topic = seed_initial_topic_and_statements(db)
 
-    # ユーザーがすでに30名以上存在している場合は二重投入しない（実運用・テストデータを維持）
+    # ユーザーがすでに30名以上存在している場合でもトピック数が不足している場合は12トピックを補充
     user_count = db.scalar(select(func.count(User.id)).where(User.handle != "運営チーム")) or 0
-    if user_count >= 30:
-        return
-
-    # 32名×4日間のテスト実データを投入
-    seed_4days_32personas(db, topic)
+    if user_count < 30:
+        seed_4days_32personas(db, topic)
+    else:
+        topic_count = db.scalar(select(func.count(Topic.id))) or 0
+        if topic_count < 13:
+            users = db.scalars(select(User).where(User.handle != "運営チーム").order_by(User.id.asc())).all()
+            seed_additional_12_topics(db, users)

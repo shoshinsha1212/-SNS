@@ -11,12 +11,12 @@ class Params:
     rate_alpha: float = 2.0
     rate_beta: float = 2.0
     # 最小人数ルール（賛成+反対がこの人数未満のグループは計算・表示しない）
-    min_group_n: int = 10
+    min_group_n: int = 5
     # 2.4.3 分岐点の条件
     divergence_q: float = 0.05
-    divergence_gap: float = 0.30
+    divergence_gap: float = 0.25
     # セクション判定に必要な賛成+反対の合計人数
-    min_total_n: int = 25
+    min_total_n: int = 20
     # 2.9 共通原則・条件付き合意案の閾値
     consensus_rate: float = 0.70
     bridge_rate: float = 0.55
