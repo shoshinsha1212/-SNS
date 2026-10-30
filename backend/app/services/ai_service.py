@@ -219,6 +219,19 @@ def suggest_axes(title: str, description: str) -> dict[str, Any]:
     return {"axes": axes, "ai": "mock"}
 
 
+def suggest_initial_statements(title: str, description: str) -> dict[str, Any]:
+    """トピックのタイトルと説明から、対立を生みやすい論点や共通原則となる初期論点を提案する。"""
+    core = title.strip()
+    stmts: list[str] = [
+        f"{core}において、利用者の安全性やプライバシーの保護を最優先にした共通ルールを策定すべきだ",
+        f"{core}に関わる現場の実務・業務効率化のため、ツールの導入を全面的に推奨・支援すべきだ",
+        f"十分な安全性検証や当事者の合意が得られるまでは、{core}の全面的な導入は慎重に見合わせるべきだ",
+        f"利用目的と判断のプロセスを透明化して公開することを条件として、{core}の推進を認めるべきだ",
+        f"{core}の運用指針やルール作りには、関係するすべての当事者（現場・市民）の意見を反映させるべきだ",
+    ]
+    return {"statements": stmts, "ai": "mock"}
+
+
 # ---------- P4 体験談の匿名化・要約 ----------
 def anonymize_story(body: str) -> dict[str, Any]:
     masked = body.strip()

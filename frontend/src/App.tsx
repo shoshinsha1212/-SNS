@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { BrowserRouter, Link, Route, Routes, useNavigate, useParams, useLocation } from "react-router-dom";
-import { api, type SuggestedAxis } from "./api";
+import { api } from "./api";
 import { AuthProvider, useAuth } from "./auth";
 import { StatementModal } from "./components/Common";
 import {
@@ -84,28 +84,66 @@ function RegisterPanel({ onDone }: { onDone?: () => void }) {
 }
 
 function TopicListPage() {
-  const { user } = useAuth();
+  const { user, login } = useAuth();
   const navigate = useNavigate();
   const { data: topics, loading, error, reload } = useAsync(() => api.listTopics(), []);
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
-  const [axes, setAxes] = useState<SuggestedAxis[]>([]);
+  const [axes, setAxes] = useState<{ name: string; options: string[]; why_divergent?: string }[]>([]);
+  const [statementsText, setStatementsText] = useState("");
   const suggestAct = useAction();
+  const suggestStmtsAct = useAction();
   const createAct = useAction();
 
-  const doSuggest = () =>
+  const handleOpenCreate = async () => {
+    if (!user) {
+      try {
+        const randId = Math.floor(Math.random() * 900) + 100;
+        const res = await api.createUser(`トピック発起人${randId}`, {});
+        login(res.user, res.token);
+      } catch (err) {
+        console.error("Auto login error", err);
+      }
+    }
+    setShowCreate((s) => !s);
+  };
+
+  const doSuggestAxes = () =>
     suggestAct.exec(async () => {
       const res = await api.suggestAxes(title, desc);
       setAxes(res.axes);
     });
 
+  const doSuggestStatements = () =>
+    suggestStmtsAct.exec(async () => {
+      const res = await api.suggestStatements(title, desc);
+      setStatementsText(res.statements.join("\n"));
+    });
+
+  const handleAddAxis = () => {
+    setAxes([
+      ...axes,
+      {
+        name: `立場の軸 ${axes.length + 1}`,
+        options: ["推進・活用する側", "慎重・影響を受ける側", "中立・市民", "当てはまらない"],
+        why_divergent: "立場による利害・リスクの違いを可視化するため",
+      },
+    ]);
+  };
+
   const doCreate = () =>
     createAct.exec(async () => {
+      const parsedStatements = statementsText
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s.length >= 4);
+
       const created = await api.createTopic(
         title,
         desc,
         axes.map((a) => ({ name: a.name, options: a.options })),
+        parsedStatements,
       );
       setShowCreate(false);
       reload();
@@ -140,103 +178,198 @@ function TopicListPage() {
             議論トピック一覧
           </h2>
         </div>
-        {user && (
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setShowCreate((s) => !s)}
-          >
-            {showCreate ? "✕ フォームを閉じる" : "＋ 新しいトピックを立てる"}
-          </button>
-        )}
+        <button
+          type="button"
+          className="btn btn-primary"
+          style={{ fontSize: "0.95rem", padding: "0.55rem 1.2rem", boxShadow: "0 2px 8px rgba(37,99,235,0.25)" }}
+          onClick={handleOpenCreate}
+        >
+          {showCreate ? "✕ フォームを閉じる" : "＋ 新しい議論トピックを立ち上げる"}
+        </button>
       </div>
 
       {/* Create Topic Modal / Box */}
       {showCreate && (
-        <div className="card" style={{ padding: "1.75rem", borderLeft: "4px solid var(--bridge-gradient)" }}>
-          <h3 style={{ marginTop: 0, fontSize: "1.15rem", fontWeight: 800 }}>新しい議論トピックを作成</h3>
-          <div style={{ marginBottom: "0.85rem" }}>
-            <label style={{ fontSize: "0.88rem", fontWeight: 800, display: "block", marginBottom: "0.3rem" }}>
-              トピックのタイトル
+        <div className="card" style={{ padding: "1.75rem", borderLeft: "5px solid var(--brand-blue)", marginBottom: "1.5rem", background: "#ffffff", boxShadow: "0 4px 20px rgba(0,0,0,0.06)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+            <h3 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 900, color: "var(--text-main)" }}>
+              🌱 新しい議論トピックを立ち上げる
+            </h3>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setShowCreate(false)}
+            >
+              ✕ 閉じる
+            </button>
+          </div>
+
+          <p style={{ color: "var(--text-muted)", fontSize: "0.88rem", marginTop: 0, marginBottom: "1.25rem" }}>
+            テーマと説明を入力するだけで、AIが最適な「立場の軸」と「初期の投票論点」を自動提案します。
+          </p>
+
+          {/* 1. Title */}
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={{ fontSize: "0.9rem", fontWeight: 800, display: "block", marginBottom: "0.35rem" }}>
+              ① トピックのタイトル <span style={{ color: "#ef4444" }}>*</span>
             </label>
             <input
               className="input"
-              placeholder="例：クリエイティブ制作と生成AIの学習データ還元ルール"
+              style={{ fontSize: "1rem", fontWeight: 700 }}
+              placeholder="例：週休3日制の導入における課題と現場の合意点"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
             />
           </div>
 
-          <div style={{ marginBottom: "0.85rem" }}>
-            <label style={{ fontSize: "0.88rem", fontWeight: 800, display: "block", marginBottom: "0.3rem" }}>
-              説明・問いかけ
+          {/* 2. Description */}
+          <div style={{ marginBottom: "1.25rem" }}>
+            <label style={{ fontSize: "0.9rem", fontWeight: 800, display: "block", marginBottom: "0.35rem" }}>
+              ② 説明・問いかけ（背景や参加者に持ち寄ってほしいこと）
             </label>
             <textarea
               className="textarea"
-              placeholder="このトピックで参加者からどのような原則や原体験を集めたいかを記述してください"
+              style={{ minHeight: "85px" }}
+              placeholder="例：生産性向上と業務のしわ寄せ、給与への影響など、各立場（経営者・社員・顧客）の生の体験を持ち寄り、現実的な運用ルールを探ります。"
               value={desc}
               onChange={(e) => setDesc(e.target.value)}
             />
           </div>
 
-          <div style={{ marginBottom: "1rem" }}>
-            <button
-              type="button"
-              className="btn btn-sm"
-              disabled={suggestAct.busy || title.trim().length < 2}
-              onClick={doSuggest}
-            >
-              {suggestAct.busy ? "分析・提案中…" : "✨ AIに「立場の軸」を提案してもらう"}
-            </button>
+          {/* 3. Position Axes */}
+          <div style={{ marginBottom: "1.5rem", padding: "1.1rem", background: "var(--bg-app)", borderRadius: "var(--radius-md)", border: "1px solid var(--border-subtle)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
+              <div>
+                <label style={{ fontSize: "0.92rem", fontWeight: 900, color: "var(--text-main)" }}>
+                  ③ 立場の軸（意見の違いを検証するレンズ）
+                </label>
+                <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                  参加者がどの立場から投票しているかを比較するための属性軸です（最大3軸）。
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={suggestAct.busy || title.trim().length < 2}
+                  onClick={doSuggestAxes}
+                >
+                  {suggestAct.busy ? "✨ AIが考案中…" : "✨ AIに軸を自動提案してもらう"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={handleAddAxis}
+                >
+                  ＋ 軸を手動追加
+                </button>
+              </div>
+            </div>
+
+            {axes.length === 0 ? (
+              <div style={{ padding: "1rem", textAlign: "center", color: "var(--text-muted)", fontSize: "0.86rem", background: "#ffffff", borderRadius: "var(--radius-sm)" }}>
+                上の「✨ AIに軸を自動提案してもらう」を押すか、「＋ 軸を手動追加」で立場を設定できます。
+                （未設定の場合は公開時にAIが自動生成します）
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                {axes.map((ax, idx) => (
+                  <div key={idx} style={{ background: "#ffffff", padding: "0.85rem", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-subtle)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+                      <span style={{ fontSize: "0.82rem", fontWeight: 800, color: "var(--brand-blue)" }}>
+                        軸 {idx + 1}：名前
+                      </span>
+                      <button
+                        type="button"
+                        style={{ border: "none", background: "none", color: "#ef4444", fontSize: "0.78rem", cursor: "pointer", fontWeight: 700 }}
+                        onClick={() => setAxes(axes.filter((_, i) => i !== idx))}
+                      >
+                        ✕ 削除
+                      </button>
+                    </div>
+                    <input
+                      className="input"
+                      style={{ marginBottom: "0.5rem", fontWeight: 700 }}
+                      value={ax.name}
+                      onChange={(e) => {
+                        const copy = [...axes];
+                        copy[idx] = { ...ax, name: e.target.value };
+                        setAxes(copy);
+                      }}
+                      placeholder="例：このテーマとの関わり方"
+                    />
+                    <div style={{ fontSize: "0.82rem", fontWeight: 800, color: "var(--text-muted)", marginBottom: "0.25rem" }}>
+                      選択肢（カンマ区切りで入力）
+                    </div>
+                    <input
+                      className="input"
+                      value={ax.options.join(", ")}
+                      onChange={(e) => {
+                        const copy = [...axes];
+                        copy[idx] = {
+                          ...ax,
+                          options: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                        };
+                        setAxes(copy);
+                      }}
+                      placeholder="例：推進側, 慎重側, 一般市民, 当てはまらない"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          {axes.length > 0 && (
-            <div className="card-subtle" style={{ marginBottom: "1rem" }}>
-              <div style={{ fontWeight: 800, fontSize: "0.92rem", color: "var(--text-main)", marginBottom: "0.5rem" }}>
-                設定された立場の軸（必要に応じて選択肢を編集してください）
-              </div>
-              {axes.map((ax, idx) => (
-                <div key={idx} style={{ marginBottom: "0.75rem" }}>
-                  <input
-                    className="input"
-                    style={{ marginBottom: "0.35rem", fontWeight: 700 }}
-                    value={ax.name}
-                    onChange={(e) => {
-                      const copy = [...axes];
-                      copy[idx] = { ...ax, name: e.target.value };
-                      setAxes(copy);
-                    }}
-                  />
-                  <input
-                    className="input"
-                    value={ax.options.join(", ")}
-                    onChange={(e) => {
-                      const copy = [...axes];
-                      copy[idx] = {
-                        ...ax,
-                        options: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
-                      };
-                      setAxes(copy);
-                    }}
-                  />
-                  <div style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
-                    理由：{ax.why_divergent}
-                  </div>
+          {/* 4. Initial Statements */}
+          <div style={{ marginBottom: "1.5rem", padding: "1.1rem", background: "var(--bg-app)", borderRadius: "var(--radius-md)", border: "1px solid var(--border-subtle)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.75rem" }}>
+              <div>
+                <label style={{ fontSize: "0.92rem", fontWeight: 900, color: "var(--text-main)" }}>
+                  ④ 初期の投票論点（Statement）
+                </label>
+                <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                  参加者が最初に投票する論点（1行に1問）を入力してください。
                 </div>
-              ))}
+              </div>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={suggestStmtsAct.busy || title.trim().length < 2}
+                onClick={doSuggestStatements}
+              >
+                {suggestStmtsAct.busy ? "✨ AIが論点考案中…" : "✨ AIに初期論点を提案してもらう"}
+              </button>
             </div>
-          )}
 
-          {createAct.error && <div className="error-box">{createAct.error}</div>}
+            <textarea
+              className="textarea"
+              style={{ minHeight: "120px", fontFamily: "inherit", fontSize: "0.9rem", lineHeight: 1.6 }}
+              placeholder={`1行に1つの論点を入力してください（例）：\n・利用者のプライバシー保護を最優先にした共通ルールを策定すべきだ\n・現場の業務効率化のため、ツールの導入を全面的に推奨・支援すべきだ\n・十分な合意が得られるまでは、全面的な導入は慎重に見合わせるべきだ\n\n※空欄のまま公開した場合は、AIが自動で初期論点を生成します。`}
+              value={statementsText}
+              onChange={(e) => setStatementsText(e.target.value)}
+            />
+          </div>
 
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={createAct.busy || title.trim().length < 2}
-            onClick={doCreate}
-          >
-            このトピックを公開する
-          </button>
+          {createAct.error && <div className="error-box" style={{ marginBottom: "1rem" }}>{createAct.error}</div>}
+
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ padding: "0.65rem 1.6rem", fontSize: "1rem", fontWeight: 900 }}
+              disabled={createAct.busy || title.trim().length < 2}
+              onClick={doCreate}
+            >
+              {createAct.busy ? "🚀 トピックを作成中…" : "🚀 このトピックを作成して公開する"}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setShowCreate(false)}
+            >
+              キャンセル
+            </button>
+          </div>
         </div>
       )}
 
@@ -555,18 +688,6 @@ function Header() {
   const { user, logout } = useAuth();
   const location = useLocation();
 
-  const handleReset = async () => {
-    if (window.confirm("架空の参加者やこれまでのテストデータを消去し、初期論点（12件）のみのクリーンな状態にリセットしますか？")) {
-      try {
-        await api.clearParticipants();
-        alert("参加者データをリセットしました！");
-        window.location.reload();
-      } catch (err: any) {
-        alert("リセットに失敗しました: " + (err.message || err));
-      }
-    }
-  };
-
   return (
     <header className="app-header">
       <div className="app-header-inner">
@@ -582,15 +703,6 @@ function Header() {
           <Link to="/contributions" className={`nav-item ${location.pathname === "/contributions" ? "active" : ""}`}>
             自分の貢献
           </Link>
-          <button
-            type="button"
-            className="btn btn-sm"
-            style={{ padding: "0.2rem 0.6rem", fontSize: "0.78rem", background: "rgba(239, 68, 68, 0.08)", color: "#ef4444", border: "1px solid rgba(239, 68, 68, 0.2)" }}
-            title="運営用：参加者とテスト投票を削除してリセット"
-            onClick={handleReset}
-          >
-            ⚙️ データをリセット
-          </button>
           {user ? (
             <div className="nav-user-pill">
               <span>👤 {user.handle}</span>

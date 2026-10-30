@@ -41,6 +41,7 @@ from .services.ai_service import (
     convert_complaint,
     generate_bridges,
     suggest_axes,
+    suggest_initial_statements,
 )
 from .services.analysis_service import (
     META_ATTRIBUTES,
@@ -216,6 +217,7 @@ class CreateTopicReq(BaseModel):
     title: str = Field(min_length=2, max_length=200)
     description: str = ""
     axes: list[AxisCreateIn] = Field(default_factory=list)
+    initial_statements: list[str] = Field(default_factory=list)
 
 
 class PutPositionsReq(BaseModel):
@@ -328,6 +330,11 @@ def api_suggest_axes(req: SuggestAxesReq):
     return suggest_axes(req.title, req.description)
 
 
+@app.post("/api/topics/suggest-statements")
+def api_suggest_statements(req: SuggestAxesReq):
+    return suggest_initial_statements(req.title, req.description)
+
+
 @app.post("/api/topics")
 def api_create_topic(
     req: CreateTopicReq,
@@ -364,6 +371,23 @@ def api_create_topic(
         db.flush()
         for lbl in opts_clean:
             db.add(PositionOption(axis_id=ax.id, label=lbl))
+
+    # 初期論点（投票項目）の登録
+    stmts_to_add = [s.strip() for s in req.initial_statements if s.strip() and len(s.strip()) >= 4]
+    if not stmts_to_add:
+        # 入力がない場合はAIが初期論点候補を自動生成して初期セット
+        auto_stmts = suggest_initial_statements(req.title, req.description)["statements"]
+        stmts_to_add = auto_stmts[:4]
+
+    for s_body in stmts_to_add:
+        st = Statement(
+            topic_id=topic.id,
+            author_id=user.id,
+            body=s_body[:200],
+            origin="seed",
+            status="active",
+        )
+        db.add(st)
 
     db.commit()
     db.refresh(topic)
@@ -1124,14 +1148,6 @@ def api_export_stories_csv(topic_id: int, db: Session = Depends(get_db)):
             "Content-Disposition": f'attachment; filename="topic_{topic_id}_stories.csv"',
         },
     )
-
-
-@app.post("/api/admin/clear-participants")
-def api_clear_participants(db: Session = Depends(get_db)):
-    """テストユーザー向けに、架空の参加者やこれまでのテストデータをクリアして初期論点のみの状態に戻す。"""
-    from .seed import cleanup_synthetic_data
-    res = cleanup_synthetic_data(db)
-    return {"status": "ok", "deleted": res}
 
 
 # ---------- 静的ファイル配信（フロントエンドSPA対応） ----------

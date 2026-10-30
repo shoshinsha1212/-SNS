@@ -312,8 +312,20 @@ export const api = {
   listTopics: () => request<TopicSummary[]>("GET", "/topics"),
   suggestAxes: (title: string, description: string) =>
     request<SuggestAxesResponse>("POST", "/topics/suggest-axes", { title, description }),
-  createTopic: (title: string, description: string, axes: { name: string; options: string[] }[]) =>
-    request<TopicDetail>("POST", "/topics", { title, description, axes }),
+  suggestStatements: (title: string, description: string) =>
+    request<{ statements: string[] }>("POST", "/topics/suggest-statements", { title, description }),
+  createTopic: (
+    title: string,
+    description: string,
+    axes: { name: string; options: string[] }[],
+    initialStatements?: string[],
+  ) =>
+    request<TopicDetail>("POST", "/topics", {
+      title,
+      description,
+      axes,
+      initial_statements: initialStatements ?? [],
+    }),
   getTopic: (id: number) => request<TopicDetail>("GET", `/topics/${id}`),
   putPositions: (id: number, positions: Record<string, number>) =>
     request<TopicDetail>("PUT", `/topics/${id}/positions`, { positions }),
@@ -351,6 +363,4 @@ export const api = {
   getLatestReport: (topicId: number) => request<Report>("GET", `/topics/${topicId}/report`),
   getReport: (topicId: number, version: string) =>
     request<Report>("GET", `/topics/${topicId}/reports/${encodeURIComponent(version)}`),
-  clearParticipants: () =>
-    request<{ status: string; deleted: Record<string, number> }>("POST", "/admin/clear-participants"),
 };
