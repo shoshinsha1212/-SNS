@@ -942,6 +942,14 @@ def api_get_report_version(topic_id: int, version: str, db: Session = Depends(ge
     return _serialize_report(db, rep)
 
 
+@app.post("/api/admin/clear-participants")
+def api_clear_participants(db: Session = Depends(get_db)):
+    """テストユーザー向けに、架空の参加者やこれまでのテストデータをクリアして初期論点のみの状態に戻す。"""
+    from .seed import cleanup_synthetic_data
+    res = cleanup_synthetic_data(db)
+    return {"status": "ok", "deleted": res}
+
+
 # ---------- 静的ファイル配信（フロントエンドSPA対応） ----------
 from pathlib import Path
 from fastapi.responses import FileResponse

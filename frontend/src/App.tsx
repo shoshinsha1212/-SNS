@@ -528,6 +528,18 @@ function Header() {
   const { user, logout } = useAuth();
   const location = useLocation();
 
+  const handleReset = async () => {
+    if (window.confirm("架空の参加者やこれまでのテストデータを消去し、初期論点（12件）のみのクリーンな状態にリセットしますか？")) {
+      try {
+        await api.clearParticipants();
+        alert("参加者データをリセットしました！");
+        window.location.reload();
+      } catch (err: any) {
+        alert("リセットに失敗しました: " + (err.message || err));
+      }
+    }
+  };
+
   return (
     <header className="app-header">
       <div className="app-header-inner">
@@ -543,6 +555,15 @@ function Header() {
           <Link to="/contributions" className={`nav-item ${location.pathname === "/contributions" ? "active" : ""}`}>
             自分の貢献
           </Link>
+          <button
+            type="button"
+            className="btn btn-sm"
+            style={{ padding: "0.2rem 0.6rem", fontSize: "0.78rem", background: "rgba(239, 68, 68, 0.08)", color: "#ef4444", border: "1px solid rgba(239, 68, 68, 0.2)" }}
+            title="運営用：参加者とテスト投票を削除してリセット"
+            onClick={handleReset}
+          >
+            ⚙️ データをリセット
+          </button>
           {user ? (
             <div className="nav-user-pill">
               <span>👤 {user.handle}</span>

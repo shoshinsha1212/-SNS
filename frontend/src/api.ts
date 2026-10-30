@@ -351,4 +351,6 @@ export const api = {
   getLatestReport: (topicId: number) => request<Report>("GET", `/topics/${topicId}/report`),
   getReport: (topicId: number, version: string) =>
     request<Report>("GET", `/topics/${topicId}/reports/${encodeURIComponent(version)}`),
+  clearParticipants: () =>
+    request<{ status: string; deleted: Record<string, number> }>("POST", "/admin/clear-participants"),
 };

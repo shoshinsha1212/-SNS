@@ -7,6 +7,8 @@ import os
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 import numpy as np
+from sqlalchemy import select
+from app.models import Topic, User
 
 from app.analysis.dependence import position_dependence
 from app.analysis.params import DEFAULT_PARAMS
@@ -92,6 +94,9 @@ def test_full_api_flow():
     init_db()
     with SessionLocal() as db:
         ensure_seeded(db)
+        topic = db.scalars(select(Topic)).first()
+        from app.seed import _seed_synthetic_demo_data
+        _seed_synthetic_demo_data(db, topic)
 
         # 1. メタ情報とトピック一覧
         meta = api_meta()
