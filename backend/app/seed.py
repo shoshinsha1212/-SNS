@@ -606,7 +606,12 @@ def seed_additional_12_topics(db: Session, users: list[User]) -> None:
 
     for contrib in PERSONA_CONTRIBUTIONS:
         handle = contrib["handle"]
-        u = user_by_handle.get(handle)
+        first_name = handle.split()[-1] if " " in handle else handle
+        u = None
+        for cand_u in users:
+            if first_name in cand_u.handle or cand_u.handle in handle or handle in cand_u.handle:
+                u = cand_u
+                break
         if not u:
             continue
         keyword = contrib["target_topic_keyword"]
@@ -693,12 +698,10 @@ def ensure_seeded(db: Session) -> None:
     """起動時にトピック＆初期論点を整備し、32名×4日間のテスト実データを永続化する。"""
     topic = seed_initial_topic_and_statements(db)
 
-    # ユーザーがすでに30名以上存在している場合でもトピック数が不足している場合は12トピックを補充
-    user_count = db.scalar(select(func.count(User.id)).where(User.handle != "運営チーム")) or 0
-    if user_count < 30:
+    users = db.scalars(select(User).where(User.handle != "運営チーム").order_by(User.id.asc())).all()
+    if len(users) < 30:
         seed_4days_32personas(db, topic)
-    else:
-        topic_count = db.scalar(select(func.count(Topic.id))) or 0
-        if topic_count < 13:
-            users = db.scalars(select(User).where(User.handle != "運営チーム").order_by(User.id.asc())).all()
-            seed_additional_12_topics(db, users)
+        users = db.scalars(select(User).where(User.handle != "運営チーム").order_by(User.id.asc())).all()
+    
+    # 常に12トピックおよび32名の原体験ストーリー・新原則起案を永続化・最新化
+    seed_additional_12_topics(db, users)
