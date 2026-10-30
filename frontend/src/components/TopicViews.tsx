@@ -593,6 +593,40 @@ export function StatementListTab({
 
   return (
     <div>
+      {/* Export / Download Banner Card */}
+      <div className="card" style={{ marginBottom: "1.25rem", padding: "1.1rem 1.3rem", background: "linear-gradient(135deg, rgba(37,99,235,0.05), rgba(139,92,246,0.05))", border: "1.5px solid rgba(37,99,235,0.18)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.75rem" }}>
+          <div>
+            <div style={{ fontWeight: 900, fontSize: "1rem", color: "var(--text-main)" }}>
+              📊 投票・集計データのダウンロード
+            </div>
+            <div style={{ fontSize: "0.84rem", color: "var(--text-muted)", marginTop: "0.2rem" }}>
+              各論点の賛成・反対数、立場別賛成率、投稿された原体験をExcel対応CSVでダウンロードできます。
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <a
+              href={`/api/topics/${topicId}/export/votes.csv`}
+              download
+              className="btn btn-sm btn-primary"
+              style={{ textDecoration: "none", fontSize: "0.82rem", padding: "0.4rem 0.85rem", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
+            >
+              <span>📥</span>
+              <span>投票集計 (CSV)</span>
+            </a>
+            <a
+              href={`/api/topics/${topicId}/export/stories.csv`}
+              download
+              className="btn btn-sm"
+              style={{ textDecoration: "none", fontSize: "0.82rem", padding: "0.4rem 0.85rem", display: "inline-flex", alignItems: "center", gap: "0.35rem", background: "#ffffff", border: "1px solid var(--border-subtle)" }}
+            >
+              <span>📥</span>
+              <span>原体験一覧 (CSV)</span>
+            </a>
+          </div>
+        </div>
+      </div>
+
       {/* Search & Filter Header */}
       <div style={{ marginBottom: "1rem" }}>
         <input

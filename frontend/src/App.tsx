@@ -314,6 +314,33 @@ function TopicDetailPage() {
         <p style={{ margin: 0, color: "var(--text-body)", fontSize: "0.92rem", lineHeight: 1.6 }}>
           {topic.description}
         </p>
+
+        {/* Export Actions for Participants & Admins */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.6rem", marginTop: "1rem", paddingTop: "0.85rem", borderTop: "1px solid var(--border-subtle)" }}>
+          <div style={{ fontSize: "0.82rem", color: "var(--text-muted)", fontWeight: 800 }}>
+            📥 投票結果・集計データの入手（Excel対応CSV）:
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <a
+              href={`/api/topics/${topicId}/export/votes.csv`}
+              download
+              className="btn btn-sm btn-primary"
+              style={{ textDecoration: "none", fontSize: "0.82rem", padding: "0.35rem 0.8rem", display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
+            >
+              <span>📊</span>
+              <span>投票・集計結果 (CSV)</span>
+            </a>
+            <a
+              href={`/api/topics/${topicId}/export/stories.csv`}
+              download
+              className="btn btn-sm"
+              style={{ textDecoration: "none", fontSize: "0.82rem", padding: "0.35rem 0.8rem", display: "inline-flex", alignItems: "center", gap: "0.4rem", background: "#ffffff", border: "1px solid var(--border-subtle)" }}
+            >
+              <span>📖</span>
+              <span>原体験一覧 (CSV)</span>
+            </a>
+          </div>
+        </div>
       </div>
 
       {/* Position Selector Bar */}

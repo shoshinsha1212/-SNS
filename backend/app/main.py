@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import secrets
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -940,6 +942,188 @@ def api_get_report_version(topic_id: int, version: str, db: Session = Depends(ge
     if not rep:
         raise HTTPException(status_code=404, detail="指定されたバージョンの成果物が見つかりません")
     return _serialize_report(db, rep)
+
+
+# ---------- データエクスポート（投票結果・集計・原体験 CSV） ----------
+SECTION_JA_MAP = {
+    "consensus": "立場を越えた共通原則",
+    "divergence": "立場によって見え方が違う論点",
+    "bridge": "条件付き合意案（架け橋）",
+    "value_split": "価値観による分岐",
+    "undecided": "集計中",
+}
+
+
+@app.get("/api/topics/{topic_id}/export/votes.csv")
+def api_export_votes_csv(topic_id: int, db: Session = Depends(get_db)):
+    topic = db.get(Topic, topic_id)
+    if not topic:
+        raise HTTPException(status_code=404, detail="トピックが見つかりません")
+
+    statements = db.scalars(
+        select(Statement)
+        .where(Statement.topic_id == topic_id, Statement.status == "active")
+        .order_by(Statement.id.asc())
+    ).all()
+
+    latest_votes = get_latest_votes(db, topic_id)
+    latest_snap = db.scalars(
+        select(AnalysisSnapshot)
+        .where(AnalysisSnapshot.topic_id == topic_id)
+        .order_by(AnalysisSnapshot.id.desc())
+    ).first()
+
+    stats_by_sid: dict[int, StatementStats] = {}
+    if latest_snap:
+        stats_by_sid = {
+            s.statement_id: s
+            for s in db.scalars(
+                select(StatementStats).where(StatementStats.snapshot_id == latest_snap.id)
+            ).all()
+        }
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "論点ID",
+        "論点本文",
+        "賛成数",
+        "反対数",
+        "パス数",
+        "有効投票数(賛否計)",
+        "全体賛成率(%)",
+        "合意分類",
+        "立場間ギャップ",
+        "原体験数",
+        "立場別の賛成率内訳",
+    ])
+
+    for st in statements:
+        sid = st.id
+        ag = sum(1 for (_, s), ev in latest_votes.items() if s == sid and ev.value == 1)
+        dis = sum(1 for (_, s), ev in latest_votes.items() if s == sid and ev.value == -1)
+        pas = sum(1 for (_, s), ev in latest_votes.items() if s == sid and ev.value == 0)
+        valid_n = ag + dis
+        agree_pct = round((ag / valid_n) * 100, 1) if valid_n > 0 else 0.0
+
+        st_stat = stats_by_sid.get(sid)
+        sec = SECTION_JA_MAP.get(st_stat.section if st_stat else "", "未集計")
+        gap_val = f"{st_stat.gap:.2f}" if (st_stat and st_stat.gap is not None) else "-"
+
+        n_stories = db.scalar(
+            select(func.count(StoryStatementLink.id)).where(StoryStatementLink.statement_id == sid)
+        ) or 0
+
+        pos_rates = compute_by_position(topic, sid, latest_votes)
+        pos_summary = " / ".join(
+            f"{pr['group_label']}: {int(pr['agree_rate']*100)}%(n={pr['n']})"
+            for pr in pos_rates
+            if not pr.get("hidden") and pr.get("agree_rate") is not None
+        )
+
+        writer.writerow([
+            sid,
+            st.body,
+            ag,
+            dis,
+            pas,
+            valid_n,
+            agree_pct,
+            sec,
+            gap_val,
+            n_stories,
+            pos_summary,
+        ])
+
+    csv_data = output.getvalue().encode("utf-8-sig")
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="topic_{topic_id}_votes_summary.csv"',
+        },
+    )
+
+
+@app.get("/api/topics/{topic_id}/export/stories.csv")
+def api_export_stories_csv(topic_id: int, db: Session = Depends(get_db)):
+    topic = db.get(Topic, topic_id)
+    if not topic:
+        raise HTTPException(status_code=404, detail="トピックが見つかりません")
+
+    stories = db.scalars(
+        select(Story).where(Story.topic_id == topic_id).order_by(Story.id.asc())
+    ).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "原体験ID",
+        "関連論点ID",
+        "関連論点本文",
+        "投稿者の立場",
+        "時間軸",
+        "スタンス",
+        "要約",
+        "原体験本文",
+        "共感数",
+        "理解数",
+        "投稿日時",
+    ])
+
+    KIND_JA = {"past": "過去の経験", "present": "現在の現状", "future": "未来の懸念・希望"}
+    STANCE_JA = {"supports": "賛成理由", "opposes": "反対理由", "context": "背景・文脈"}
+
+    for st in stories:
+        link = db.scalars(select(StoryStatementLink).where(StoryStatementLink.story_id == st.id)).first()
+        stmt_body = ""
+        sid = ""
+        stance = ""
+        if link:
+            sid = link.statement_id
+            stmt = db.get(Statement, link.statement_id)
+            if stmt:
+                stmt_body = stmt.body
+            stance = STANCE_JA.get(link.stance, link.stance)
+
+        pos_label = st.position_snapshot.get("main_position") or ""
+        if not pos_label:
+            for k, v in st.position_snapshot.items():
+                if k.startswith("axis:"):
+                    pos_label = str(v)
+                    break
+        if not pos_label:
+            pos_label = "未設定"
+
+        res_cnt = db.scalar(
+            select(func.count(StoryReaction.id)).where(StoryReaction.story_id == st.id, StoryReaction.kind == "resonate")
+        ) or 0
+        und_cnt = db.scalar(
+            select(func.count(StoryReaction.id)).where(StoryReaction.story_id == st.id, StoryReaction.kind == "understand")
+        ) or 0
+
+        writer.writerow([
+            st.id,
+            sid,
+            stmt_body,
+            pos_label,
+            KIND_JA.get(st.kind, st.kind),
+            stance,
+            st.summary,
+            st.body,
+            res_cnt,
+            und_cnt,
+            st.created_at.strftime("%Y-%m-%d %H:%M:%S") if st.created_at else "",
+        ])
+
+    csv_data = output.getvalue().encode("utf-8-sig")
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="topic_{topic_id}_stories.csv"',
+        },
+    )
 
 
 @app.post("/api/admin/clear-participants")
