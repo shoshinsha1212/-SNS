@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: seika-sns
+    runtime: docker
+    plan: free
+    region: singapore # 日本から最も近いリージョン
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: DATABASE_URL
+        value: sqlite:////app/backend/data/seika.db
+      - key: OPENAI_API_KEY
+        sync: false # 必要に応じてRenderの管理画面で設定
