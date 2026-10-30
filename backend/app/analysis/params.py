@@ -16,7 +16,7 @@ class Params:
     divergence_q: float = 0.05
     divergence_gap: float = 0.30
     # セクション判定に必要な賛成+反対の合計人数
-    min_total_n: int = 50
+    min_total_n: int = 25
     # 2.9 共通原則・条件付き合意案の閾値
     consensus_rate: float = 0.70
     bridge_rate: float = 0.55

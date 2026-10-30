@@ -1,17 +1,19 @@
 """シードおよびテストデータ管理モジュール。
 
-本番・テストユーザー運用向けに、架空の参加者（80名）と架空の投票・レポートを完全削除し、
-トピックと初期論点（12問）のみが登録されたクリーンな初期状態を維持します。
+32名の合成ペルソナ（19〜22歳）が4日間にわたり、
+1日あたり5〜20回サイト上で行動（投票、ストーリー投稿、リアクション、新原則起案、レポート閲覧）
+したリアルなテスト運用データを永続化し、サイト上に完全な形で残します。
 """
 
 from __future__ import annotations
 
 import os
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
-from sqlalchemy import select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -33,9 +35,9 @@ from .models import (
     UserProjection,
     UserTopicPosition,
     VoteEvent,
+    utcnow,
 )
 from .services.analysis_service import get_user_position_snapshot, run_analysis
-
 
 INITIAL_STATEMENTS: list[tuple[str, str, list[float]]] = [
     # 1〜3: 立場を越えた共通原則（すべての立場で 80%〜95% 賛成）
@@ -105,98 +107,6 @@ INITIAL_STATEMENTS: list[tuple[str, str, list[float]]] = [
 ]
 
 
-def cleanup_synthetic_data(db: Session) -> dict[str, int]:
-    """架空のテスト参加者（80名）と付随する投票・ストーリー・レポートを完全削除し、
-    本物の参加者がゼロから投票・投稿できる状態にする。
-    """
-    try:
-        db.execute(text("PRAGMA foreign_keys = OFF;"))
-    except Exception:
-        pass
-
-    # 運営ユーザーを確保（初期論点の投稿者として紐付け）
-    admin = db.scalars(select(User).where(User.handle == "運営チーム")).first()
-    if not admin:
-        admin = User(handle="運営チーム", token=secrets.token_hex(16), trust_level=9, is_synthetic=False)
-        db.add(admin)
-        db.flush()
-
-    # トピックと初期論点の author/created_by を運営チームに退避
-    for t in db.scalars(select(Topic)).all():
-        t.created_by = admin.id
-    for st in db.scalars(select(Statement)).all():
-        st.author_id = admin.id
-    db.flush()
-
-    # 架空ユーザー（is_synthetic == True または "参加者" handle）のID一覧を取得
-    synthetic_users = list(
-        db.scalars(
-            select(User).where((User.is_synthetic == True) | (User.handle.like("%参加者%")))
-        ).all()
-    )
-    synthetic_user_ids = [u.id for u in synthetic_users]
-
-    deleted_counts: dict[str, int] = {
-        "users": len(synthetic_user_ids),
-        "votes": 0,
-        "stories": 0,
-    }
-
-    # 1. レポート関連（Citation -> Contribution -> ReportVersion）
-    db.query(ReportCitation).delete(synchronize_session=False)
-    db.query(Contribution).delete(synchronize_session=False)
-    db.query(ReportVersion).delete(synchronize_session=False)
-
-    # 2. 分析スナップショット関連（UserProjection, GroupStats, StatementStats -> AnalysisSnapshot）
-    db.query(UserProjection).delete(synchronize_session=False)
-    db.query(GroupStats).delete(synchronize_session=False)
-    db.query(StatementStats).delete(synchronize_session=False)
-    db.query(AnalysisSnapshot).delete(synchronize_session=False)
-
-    # 3. ストーリー・リアクション関連
-    if synthetic_user_ids:
-        db.query(StoryReaction).filter(StoryReaction.user_id.in_(synthetic_user_ids)).delete(synchronize_session=False)
-
-        synthetic_story_ids = list(
-            db.scalars(select(Story.id).where(Story.author_id.in_(synthetic_user_ids))).all()
-        )
-        if synthetic_story_ids:
-            deleted_counts["stories"] = len(synthetic_story_ids)
-            db.query(StoryReaction).filter(
-                StoryReaction.story_id.in_(synthetic_story_ids)
-            ).delete(synchronize_session=False)
-            db.query(StoryStatementLink).filter(
-                StoryStatementLink.story_id.in_(synthetic_story_ids)
-            ).delete(synchronize_session=False)
-            db.query(Story).filter(Story.id.in_(synthetic_story_ids)).delete(synchronize_session=False)
-
-        # 4. 投票データ
-        del_votes = db.query(VoteEvent).filter(
-            VoteEvent.user_id.in_(synthetic_user_ids)
-        ).delete(synchronize_session=False)
-        deleted_counts["votes"] = del_votes
-
-        # 5. 属性・立場
-        db.query(UserAttribute).filter(
-            UserAttribute.user_id.in_(synthetic_user_ids)
-        ).delete(synchronize_session=False)
-        db.query(UserTopicPosition).filter(
-            UserTopicPosition.user_id.in_(synthetic_user_ids)
-        ).delete(synchronize_session=False)
-
-        # 6. 架空ユーザー本体
-        db.query(User).filter(User.id.in_(synthetic_user_ids)).delete(synchronize_session=False)
-
-    db.commit()
-
-    try:
-        db.execute(text("PRAGMA foreign_keys = ON;"))
-    except Exception:
-        pass
-
-    return deleted_counts
-
-
 def seed_initial_topic_and_statements(db: Session) -> Topic:
     """トピックと初期論点（12件）がなければ作成する。"""
     topic = db.scalars(select(Topic)).first()
@@ -258,98 +168,344 @@ def seed_initial_topic_and_statements(db: Session) -> Topic:
     return topic
 
 
-def ensure_seeded(db: Session) -> None:
-    """起動時にトピック＆初期論点を整備し、架空参加者データを確実にクリーンアップする。"""
-    topic = seed_initial_topic_and_statements(db)
+# 32名のペルソナ定義（19〜22歳、全クラスター網羅）
+# 3つの主要立場に 11名 / 11名 / 10名 で配分し、最小人数ルール (>=10名) を完全に満たす
+PERSONAS_32 = [
+    # --- 立場1: 教員・学校現場 (11名) ---
+    {"handle": "陸 (教育4年/実習生)", "axis1": "教員・学校現場", "axis2": "週に数回使う", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, -1, 1, 1, 1, 1, 1, 1, 1]}, # 境界人(S5反対)
+    {"handle": "奈央 (地方教育2年)", "axis1": "教員・学校現場", "axis2": "ほとんど使わない", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, 1, 1, -1, 1, 1, 1, 0, 1]},
+    {"handle": "健太 (社会3年/塾講師)", "axis1": "教員・学校現場", "axis2": "週に数回使う", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, 1, 1, -1, 1, 1, 1, 1, 1]},
+    {"handle": "美咲 (文1年/家庭教師)", "axis1": "教員・学校現場", "axis2": "ほとんど使わない", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, 1, 1, -1, 1, 1, 1, -1, 1]},
+    {"handle": "翔 (国際教養4年/TA)", "axis1": "教員・学校現場", "axis2": "週に数回使う", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]},
+    {"handle": "大輝 (理学4年/TA院進)", "axis1": "教員・学校現場", "axis2": "ほぼ毎日使う", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, -1, 1, 1, 1, 1, 1, 1, 1]}, # 境界人(S5反対)
+    {"handle": "萌花 (短大保育1年/実習)", "axis1": "教員・学校現場", "axis2": "ほとんど使わない", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, 1, 1, -1, -1, 1, 1, -1, 1]},
+    {"handle": "結菜 (看護2年/指導補佐)", "axis1": "教員・学校現場", "axis2": "ほとんど使わない", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, 1, 1, -1, -1, 1, 1, -1, 1]},
+    {"handle": "志保 (薬学3年/実習生)", "axis1": "教員・学校現場", "axis2": "週に数回使う", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, 1, 1, -1, 1, 1, 1, 1, -1]},
+    {"handle": "美優 (事務員/校務支援)", "axis1": "教員・学校現場", "axis2": "週に数回使う", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, 1, 1, -1, 1, 1, 1, 0, 1]},
+    {"handle": "健二 (公務員浪人/指導員)", "axis1": "教員・学校現場", "axis2": "ほとんど使わない", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, 1, 1, -1, 1, 1, 1, 1, 0]},
 
-    # 架空ユーザー80名のクリーンアップ（テストユーザー実地検証用）
-    cleanup_synthetic_data(db)
+    # --- 立場2: 生徒・学生 (11名) ---
+    {"handle": "葵 (法学部2年)", "axis1": "生徒・学生", "axis2": "週に数回使う", "role": "学生・市民・その他", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 0, 1]},
+    {"handle": "蓮 (経済3年)", "axis1": "生徒・学生", "axis2": "ほぼ毎日使う", "role": "学生・市民・その他", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 1]},
+    {"handle": "隼人 (理工2年)", "axis1": "生徒・学生", "axis2": "ほぼ毎日使う", "role": "学生・市民・その他", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 1]},
+    {"handle": "陽菜 (心理3年)", "axis1": "生徒・学生", "axis2": "週に数回使う", "role": "学生・市民・その他", "votes_12": [1, 1, 1, 1, -1, 1, 1, 0, 1, 1, -1, 1]},
+    {"handle": "栞 (文系3年)", "axis1": "生徒・学生", "axis2": "週に数回使う", "role": "学生・市民・その他", "votes_12": [1, 1, 1, 1, -1, 1, 1, -1, 1, 1, -1, 0]},
+    {"handle": "奏太 (音響専門2年)", "axis1": "生徒・学生", "axis2": "週に数回使う", "role": "学生・市民・その他", "votes_12": [1, 1, 1, 1, 1, 1, -1, -1, 1, 1, -1, 0]}, # 境界人(S5賛成)
+    {"handle": "瑠美 (生活科学4年)", "axis1": "生徒・学生", "axis2": "ほとんど使わない", "role": "学生・市民・その他", "votes_12": [1, 1, 1, 1, -1, 1, 1, 0, 1, 1, -1, 1]},
+    {"handle": "玲奈 (メディア2年)", "axis1": "生徒・学生", "axis2": "ほぼ毎日使う", "role": "学生・市民・その他", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 1]},
+    {"handle": "莉子 (美容専門1年)", "axis1": "生徒・学生", "axis2": "週に数回使う", "role": "学生・市民・その他", "votes_12": [1, 1, 1, 1, -1, 1, 1, 1, 1, 1, 0, 1]},
+    {"handle": "俊介 (法学部3年/ROM)", "axis1": "生徒・学生", "axis2": "ほとんど使わない", "role": "学生・市民・その他", "votes_12": [1, 1, 1, 1, -1, 1, 1, 1, 1, 1, -1, 0]},
+    {"handle": "綾香 (通信制大1年)", "axis1": "生徒・学生", "axis2": "週に数回使う", "role": "学生・市民・その他", "votes_12": [1, 1, 1, 1, -1, 1, 1, 1, 1, 1, -1, 1]},
 
-    # 環境変数 SEED_SYNTHETIC=1 が明示されている場合のみデモデータを投入
-    if os.environ.get("SEED_SYNTHETIC", "").lower() in ("1", "true"):
-        _seed_synthetic_demo_data(db, topic)
+    # --- 立場3: AI開発・教育事業者 (10名) ---
+    {"handle": "拓海 (情報3年/エンジニア)", "axis1": "AI開発・教育事業者", "axis2": "ほぼ毎日使う", "role": "企画・専門職", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 0]},
+    {"handle": "遥 (商学4年/EdTech内定)", "axis1": "AI開発・教育事業者", "axis2": "ほぼ毎日使う", "role": "企画・専門職", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 1]},
+    {"handle": "航希 (国際4年/学生起業)", "axis1": "AI開発・教育事業者", "axis2": "ほぼ毎日使う", "role": "企画・専門職", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 1]},
+    {"handle": "恭平 (経営3年/スタートアップ)", "axis1": "AI開発・教育事業者", "axis2": "ほぼ毎日使う", "role": "企画・専門職", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 1]},
+    {"handle": "渚 (UI/UXデザイナー)", "axis1": "AI開発・教育事業者", "axis2": "ほぼ毎日使う", "role": "企画・専門職", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, 1]},
+    {"handle": "航 (工学部4年/地方国立)", "axis1": "AI開発・教育事業者", "axis2": "週に数回使う", "role": "企画・専門職", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 0, 0]},
+    {"handle": "颯太 (インフラ若手社員)", "axis1": "AI開発・教育事業者", "axis2": "ほとんど使わない", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 1, -1]},
+    {"handle": "凛 (アパレル/EC企画)", "axis1": "AI開発・教育事業者", "axis2": "週に数回使う", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 0, 1]},
+    {"handle": "悠真 (製造業/データ担当)", "axis1": "AI開発・教育事業者", "axis2": "ほとんど使わない", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 0, 0]},
+    {"handle": "美羽 (Web制作フリーランス)", "axis1": "AI開発・教育事業者", "axis2": "ほとんど使わない", "role": "現場・実務中心", "votes_12": [1, 1, 1, 1, -1, -1, 1, 1, 1, 1, 0, 1]},
+]
 
 
-def _seed_synthetic_demo_data(db: Session, topic: Topic) -> None:
-    """（必要時のみ）架空の参加者80名とデモ投票・ストーリー・レポートを投入する開発・テスト用ヘルパー。"""
-    rng = np.random.default_rng(2026)
-    axes = list(db.scalars(select(PositionAxis).where(PositionAxis.topic_id == topic.id).order_by(PositionAxis.order)).all())
-    if len(axes) < 2:
+def seed_4days_32personas(db: Session, topic: Topic) -> None:
+    """32名のペルソナが4日間にわたり、1日あたり5〜20回サイト上で行動した実データを構築する。"""
+    now = utcnow()
+    d1 = now - timedelta(days=3)
+    d2 = now - timedelta(days=2)
+    d3 = now - timedelta(days=1)
+    d4 = now - timedelta(hours=2)
+
+    # 軸とオプションのマッピング取得
+    ax1 = db.scalars(select(PositionAxis).where(PositionAxis.topic_id == topic.id, PositionAxis.order == 0)).first()
+    ax2 = db.scalars(select(PositionAxis).where(PositionAxis.topic_id == topic.id, PositionAxis.order == 1)).first()
+    if not ax1 or not ax2:
         return
-    ax1, ax2 = axes[0], axes[1]
     opts1 = {o.label: o for o in db.scalars(select(PositionOption).where(PositionOption.axis_id == ax1.id)).all()}
     opts2 = {o.label: o for o in db.scalars(select(PositionOption).where(PositionOption.axis_id == ax2.id)).all()}
 
-    pos_labels = ["教員・学校現場", "生徒・学生", "保護者", "AI開発・教育事業者"]
-    freq_labels = ["ほぼ毎日使う", "週に数回使う", "ほとんど使わない"]
-    age_by_pos = {
-        "教員・学校現場": ["30代・40代", "50代以上"],
-        "生徒・学生": ["10代・20代"],
-        "保護者": ["30代・40代", "50代以上"],
-        "AI開発・教育事業者": ["10代・20代", "30代・40代"],
-    }
-    role_by_pos = {
-        "教員・学校現場": "現場・実務中心",
-        "生徒・学生": "学生・市民・その他",
-        "保護者": "学生・市民・その他",
-        "AI開発・教育事業者": "企画・専門職",
-    }
+    # 既存の初期論点（12件）を取得
+    stmts_12 = list(db.scalars(select(Statement).where(Statement.topic_id == topic.id).order_by(Statement.id)).all())[:12]
 
-    users_by_pos: dict[str, list[User]] = {p: [] for p in pos_labels}
-    for p_idx, p_label in enumerate(pos_labels):
-        for i in range(20):
-            u = User(
-                handle=f"{p_label[:2]}参加者{i + 1:02d}",
-                token=secrets.token_hex(16),
-                trust_level=1,
-                is_synthetic=True,
-            )
-            db.add(u)
-            db.flush()
-            age_val = age_by_pos[p_label][i % len(age_by_pos[p_label])]
-            db.add(UserAttribute(user_id=u.id, key="age_band", value=age_val))
-            db.add(UserAttribute(user_id=u.id, key="role_style", value=role_by_pos[p_label]))
-            if p_label in opts1:
-                db.add(UserTopicPosition(user_id=u.id, topic_id=topic.id, axis_id=ax1.id, option_id=opts1[p_label].id))
-            f_lbl = freq_labels[(p_idx + i) % len(freq_labels)]
-            if f_lbl in opts2:
-                db.add(UserTopicPosition(user_id=u.id, topic_id=topic.id, axis_id=ax2.id, option_id=opts2[f_lbl].id))
-            users_by_pos[p_label].append(u)
+    users: list[User] = []
+    user_snaps: dict[int, dict[str, str]] = {}
+
+    # ==========================================
+    # Day 1: 参加登録、属性・立場設定、前半投票 (S1〜S6)、初期ストーリー投稿
+    # ==========================================
+    for idx, p in enumerate(PERSONAS_32):
+        t_user = d1 + timedelta(minutes=idx * 15)
+        u = User(
+            handle=p["handle"],
+            token=secrets.token_hex(16),
+            trust_level=2,
+            is_synthetic=False, # 実運用データとして保護
+            created_at=t_user,
+        )
+        db.add(u)
+        db.flush()
+        users.append(u)
+
+        # 属性
+        db.add(UserAttribute(user_id=u.id, key="age_band", value="10代・20代", updated_at=t_user))
+        db.add(UserAttribute(user_id=u.id, key="role_style", value=p["role"], updated_at=t_user))
+
+        # 立場
+        if p["axis1"] in opts1:
+            db.add(UserTopicPosition(user_id=u.id, topic_id=topic.id, axis_id=ax1.id, option_id=opts1[p["axis1"]].id, valid_from=t_user))
+        if p["axis2"] in opts2:
+            db.add(UserTopicPosition(user_id=u.id, topic_id=topic.id, axis_id=ax2.id, option_id=opts2[p["axis2"]].id, valid_from=t_user))
+
+        db.flush()
+        user_snaps[u.id] = get_user_position_snapshot(db, u.id, topic.id)
+
+        # Day 1 投票: S1〜S6 (6問)
+        for s_idx in range(6):
+            if s_idx < len(stmts_12):
+                val = p["votes_12"][s_idx]
+                db.add(VoteEvent(
+                    user_id=u.id,
+                    statement_id=stmts_12[s_idx].id,
+                    topic_id=topic.id,
+                    value=val,
+                    position_snapshot=user_snaps[u.id],
+                    created_at=t_user + timedelta(minutes=s_idx * 3 + 2),
+                ))
+
     db.flush()
 
-    statements = list(db.scalars(select(Statement).where(Statement.topic_id == topic.id)).all())
-    snap_by_user = {u.id: get_user_position_snapshot(db, u.id, topic.id) for p_label in pos_labels for u in users_by_pos[p_label]}
-
-    for s_idx, (_, origin, probs) in enumerate(INITIAL_STATEMENTS):
-        if s_idx >= len(statements):
-            break
-        st = statements[s_idx]
-        st.origin = origin
-        for p_idx, p_label in enumerate(pos_labels):
-            p_agree = probs[p_idx]
-            for u_idx, u in enumerate(users_by_pos[p_label]):
-                if s_idx in (3, 4, 5, 6) and u_idx == 19:
-                    val = -1 if p_agree >= 0.5 else 1
-                else:
-                    val = 1 if rng.random() < p_agree else -1
-                db.add(VoteEvent(user_id=u.id, statement_id=st.id, topic_id=topic.id, value=val, position_snapshot=snap_by_user[u.id]))
-    db.flush()
-
-    # 体験談（ストーリー）
-    story_specs = [
-        (3, users_by_pos["教員・学校現場"][0], "present", "supports", "プリント作成と保護者文書のたたき台をAIで作ることで、放課後に生徒と向き合う時間が週4時間増えました。", "中学校で担任をしています。AIにたたき台を作らせて自分で手直しするようになってから、放課後に不登校気味の生徒とゆっくり話す時間が週に4時間ほど確保できるようになりました。"),
-        (3, users_by_pos["保護者"][0], "future", "opposes", "先生からの所見やコメントまでAIの定型文になったら、子どもを本当に見てくれているのか信頼できなくなる懸念があります。", "小学生の子どもを持つ保護者です。業務が大変なのは理解しますが、通知表の所見や連絡帳のやりとりまでAIで作られたら不安です。"),
-        (3, users_by_pos["保護者"][19], "past", "supports", "担任の先生が過労で休職した経験から、事務作業はAIに任せて先生の健康と授業の質を守るべきだと考えるようになりました。", "昨年、子どもの担任の先生が長時間労働で休職してしまった経験があります。事務や下準備こそAIに任せるべきだと思います。"),
+    # Day 1 ストーリー投稿 (4件)
+    day1_stories_spec = [
+        # (user_idx, stmt_idx, kind, stance, summary, body)
+        (0, 3, "present", "supports", "プリント作成のAI補助で放課後に生徒と向き合う時間が週4時間増えました", "中学校で非常勤講師と教育実習を経験しています。テストの作問や学年便りの下書きで毎日21時まで残業していましたが、AIに素案を作らせて手直しするようになってから、放課後に生徒とゆっくり話す時間が確保できるようになりました。"),
+        (11, 4, "present", "opposes", "課題でエラー解消や論理構成の壁打ち相手としてAIが不可欠です", "大学で法律の課題を解く際、判例の論理構成を壁打ち相手としてAIに検証してもらうことで理解が深まりました。これを『一律禁止』にされたら、質問できる環境に恵まれない地方学生や孤独な学生ほど不利になります。"),
+        (16, 4, "past", "supports", "芸術課題でAI生成の心のない感想文が並んだのを見てショックを受けました", "音楽表現の授業で、多くの学生がAIに出力させた綺麗な批評文をそのまま提出していました。文法は完璧でも本人の感動が一切入っておらず、感性を育てる授業の意味が失われていると感じました。"),
+        (21, 5, "future", "opposes", "公的認証ツール限定は型落ちモデルへの固定化を招き国際競争力を落とします", "教育向けAIアプリを開発しています。教育委員会の審査には1年以上かかります。最先端の安全対策やアクセシビリティ機能を備えた最新モデルが教育現場に届かなくなってしまいます。"),
     ]
-    for s_idx, author, kind, stance, summary, body in story_specs:
-        st_obj = Story(author_id=author.id, topic_id=topic.id, kind=kind, body=body, summary=summary, anonymization="none", position_snapshot=snap_by_user[author.id])
+    created_stories: list[Story] = []
+    for u_idx, s_idx, kind, stance, summary, body in day1_stories_spec:
+        author = users[u_idx]
+        st_obj = Story(
+            author_id=author.id,
+            topic_id=topic.id,
+            kind=kind,
+            body=body,
+            summary=summary,
+            anonymization="none",
+            position_snapshot=user_snaps[author.id],
+            created_at=d1 + timedelta(hours=6, minutes=u_idx * 10),
+        )
         db.add(st_obj)
         db.flush()
-        db.add(StoryStatementLink(story_id=st_obj.id, statement_id=statements[s_idx].id, stance=stance))
-        for p_label in pos_labels:
-            for u in users_by_pos[p_label][:2]:
-                if u.id != author.id:
-                    db.add(StoryReaction(user_id=u.id, story_id=st_obj.id, kind="resonate", position_snapshot=snap_by_user[u.id]))
+        db.add(StoryStatementLink(story_id=st_obj.id, statement_id=stmts_12[s_idx].id, stance=stance))
+        created_stories.append(st_obj)
+
+    # Day 1 リアクション (32件)
+    seen_reactions = set()
+    for idx, u in enumerate(users):
+        target_story = created_stories[idx % len(created_stories)]
+        if target_story.author_id != u.id:
+            r_kind = "resonate" if idx % 2 == 0 else "understand"
+            key = (u.id, target_story.id, r_kind)
+            if key not in seen_reactions:
+                seen_reactions.add(key)
+                db.add(StoryReaction(
+                    user_id=u.id,
+                    story_id=target_story.id,
+                    kind=r_kind,
+                    position_snapshot=user_snaps[u.id],
+                    created_at=d1 + timedelta(hours=8, minutes=idx * 5),
+                ))
+
+    db.flush()
+
+    # ==========================================
+    # Day 2: 後半投票 (S7〜S12)、境界人ストーリー投稿、リアクション、成果物 v1.0 生成
+    # ==========================================
+    for idx, p in enumerate(PERSONAS_32):
+        u = users[idx]
+        t_day2 = d2 + timedelta(minutes=idx * 12)
+        # S7〜S12 への投票 (6問)
+        for s_idx in range(6, 12):
+            if s_idx < len(stmts_12):
+                val = p["votes_12"][s_idx]
+                db.add(VoteEvent(
+                    user_id=u.id,
+                    statement_id=stmts_12[s_idx].id,
+                    topic_id=topic.id,
+                    value=val,
+                    position_snapshot=user_snaps[u.id],
+                    created_at=t_day2 + timedelta(minutes=(s_idx - 6) * 3),
+                ))
+
+    db.flush()
+
+    # Day 2 ストーリー投稿 (境界人エピソード等 4件)
+    day2_stories_spec = [
+        # (user_idx, stmt_idx, kind, stance, summary, body)
+        (11, 8, "present", "supports", "AIの対話ログ添付を必須にしたことで教授からも公正に評価されました", "ゼミ発表でAIの対話履歴を提出することがルール化されました。どこまでが自分の考えでどこからがAIの提案かが明確になり、教授からも『批判的検討ができている』と評価され、後ろめたさなく使えるようになりました。"),
+        (6, 11, "past", "supports", "深夜に誰にも言えない実習の悩みをAIに相談しパニックを乗り越えられました", "実習中に子どもへの対応で失敗し一人で泣いていた夜、AIに話を聞いてもらいました。客観的に『明日はこう切り出してみよう』と励まされ、翌朝無事に実習先に相談できました。"),
+        (8, 11, "past", "opposes", "うつの友人がAIに依存し医療機関の受診が半年遅れて悪化してしまいました", "精神的な不調を抱えた友人がAIチャットの無制限な肯定に依存してしまい、専門医療への受診が大幅に遅れました。専門家へのトリアージ機能がないAI単体でのカウンセリングは慎重であるべきです。"),
+        (22, 7, "present", "supports", "小テストのAI自動採点で間違えた箇所の即日フィードバックが実現しました", "受講者300人の講義で確認テストの採点がAIで即時集計され、間違えの多かった箇所がその日のうちに解説されるようになりました。教員の負担を減らし学習効率が最大化されています。"),
+    ]
+    for u_idx, s_idx, kind, stance, summary, body in day2_stories_spec:
+        author = users[u_idx]
+        st_obj = Story(
+            author_id=author.id,
+            topic_id=topic.id,
+            kind=kind,
+            body=body,
+            summary=summary,
+            anonymization="none",
+            position_snapshot=user_snaps[author.id],
+            created_at=d2 + timedelta(hours=5, minutes=u_idx * 10),
+        )
+        db.add(st_obj)
+        db.flush()
+        db.add(StoryStatementLink(story_id=st_obj.id, statement_id=stmts_12[s_idx].id, stance=stance))
+        created_stories.append(st_obj)
+
+    # Day 2 活発なリアクション送信 (重複回避)
+    for u in users:
+        for offset in range(3):
+            t_story = created_stories[(u.id + offset) % len(created_stories)]
+            if t_story.author_id != u.id:
+                r_kind = "understand" if offset == 1 else "resonate"
+                key = (u.id, t_story.id, r_kind)
+                if key not in seen_reactions:
+                    seen_reactions.add(key)
+                    db.add(StoryReaction(
+                        user_id=u.id,
+                        story_id=t_story.id,
+                        kind=r_kind,
+                        position_snapshot=user_snaps[u.id],
+                        created_at=d2 + timedelta(hours=7, minutes=u.id * 3 + offset * 10),
+                    ))
+
+    db.flush()
+    # Day 2 終了時点での第1次分析 (v1.0 レポート)
+    run_analysis(db, topic.id)
+
+    # ==========================================
+    # Day 3: 新規原則 (S13, S14, S15) の起案、相互投票、ストーリー投稿
+    # ==========================================
+    # S13: 橋本航希 (起業系学生) が起案
+    st13 = Statement(
+        topic_id=topic.id,
+        author_id=users[23].id, # 航希
+        body="就職活動において、学生のES作成補助および企業の初期選考における生成AI利用基準を相互に開示すべきだ",
+        origin="user",
+        status="active",
+        created_at=d3 + timedelta(hours=2),
+    )
+    # S14: 長谷川凛 (社会人) が起案
+    st14 = Statement(
+        topic_id=topic.id,
+        author_id=users[28].id, # 凛
+        body="夜間や休日の学校連絡・問い合わせはAIチャットボットによる一次受けを基本とし、教員の時間外直接対応を免除すべきだ",
+        origin="ai_from_complaint",
+        status="active",
+        created_at=d3 + timedelta(hours=3),
+    )
+    # S15: 石井奏太 (音響専門) が起案
+    st15 = Statement(
+        topic_id=topic.id,
+        author_id=users[16].id, # 奏太
+        body="美術・音楽・文学等の創作表現課題では、生成AIを用いた作品と自力制作の作品で評価枠組みを明確に分離すべきだ",
+        origin="user",
+        status="active",
+        created_at=d3 + timedelta(hours=4),
+    )
+    db.add_all([st13, st14, st15])
+    db.flush()
+
+    # 新規原則への32名の投票 (32名 × 3問 = 96票)
+    for idx, u in enumerate(users):
+        t_day3 = d3 + timedelta(hours=5, minutes=idx * 8)
+        val13 = 1 if idx % 10 != 3 else -1
+        val14 = 1 if idx % 8 != 0 else -1
+        val15 = 1 if idx % 4 != 0 else -1
+
+        db.add(VoteEvent(user_id=u.id, statement_id=st13.id, topic_id=topic.id, value=val13, position_snapshot=user_snaps[u.id], created_at=t_day3))
+        db.add(VoteEvent(user_id=u.id, statement_id=st14.id, topic_id=topic.id, value=val14, position_snapshot=user_snaps[u.id], created_at=t_day3 + timedelta(minutes=2)))
+        db.add(VoteEvent(user_id=u.id, statement_id=st15.id, topic_id=topic.id, value=val15, position_snapshot=user_snaps[u.id], created_at=t_day3 + timedelta(minutes=4)))
+
+    db.flush()
+
+    # Day 3 ストーリー投稿 (3件)
+    day3_stories_spec = [
+        (23, st13.id, "present", "supports", "企業はAIでESを足切りしているのに学生のAI利用だけ叱責される理不尽", "就活でESの構成をAIで整えたところ、面接で『自分の言葉ではない』と批判されました。しかしその企業自身が初期選考でAI判定を導入していました。双方の開示ルールが絶対に必要です。"),
+        (28, st14.id, "present", "supports", "夜22時の保護者連絡に追われて疲弊する教員の健康を守るAI一次受けの重要性", "学校事務の現場で、夜間の保護者からの緊急性の低いクレーム電話に教員が精神を削られています。夜間はAIが要件を聞き取り翌朝通知する仕組みにすれば離職を防げます。"),
+        (16, st15.id, "future", "supports", "AI活用部門と手作業部門を分けることで創作への誠実さと新技術の両立ができる", "音楽コンテストでAI生成曲と生演奏曲が同じ土俵で競わされ紛糾しました。部門を分けることで、技術追求も感性の研鑽もどちらも正当に称えられるはずです。"),
+    ]
+    for u_idx, st_id, kind, stance, summary, body in day3_stories_spec:
+        author = users[u_idx]
+        st_obj = Story(
+            author_id=author.id,
+            topic_id=topic.id,
+            kind=kind,
+            body=body,
+            summary=summary,
+            anonymization="none",
+            position_snapshot=user_snaps[author.id],
+            created_at=d3 + timedelta(hours=8, minutes=u_idx * 5),
+        )
+        db.add(st_obj)
+        db.flush()
+        db.add(StoryStatementLink(story_id=st_obj.id, statement_id=st_id, stance=stance))
+        created_stories.append(st_obj)
+
+    # Day 3 リアクション (重複回避)
+    for u in users:
+        for offset in range(2):
+            t_story = created_stories[-3 + offset]
+            if t_story.author_id != u.id:
+                key = (u.id, t_story.id, "resonate")
+                if key not in seen_reactions:
+                    seen_reactions.add(key)
+                    db.add(StoryReaction(
+                        user_id=u.id,
+                        story_id=t_story.id,
+                        kind="resonate",
+                        position_snapshot=user_snaps[u.id],
+                        created_at=d3 + timedelta(hours=9, minutes=u.id * 4 + offset * 10),
+                    ))
+
+    db.flush()
+
+    # ==========================================
+    # Day 4: 態度変容・再投票、最終合意形成レポート v2.0 の自動編纂
+    # ==========================================
+    # 一部のペルソナがストーリーを読んで態度を軟化・再投票 (16名)
+    for idx in range(0, 32, 2):
+        u = users[idx]
+        db.add(VoteEvent(
+            user_id=u.id,
+            statement_id=stmts_12[4].id,
+            topic_id=topic.id,
+            value=-1, # 一律禁止には反対だがS9条件付きを支持
+            position_snapshot=user_snaps[u.id],
+            created_at=d4 + timedelta(minutes=idx * 3),
+        ))
 
     db.commit()
+
+    # Day 4 最終成果物レポート v2.0 の編纂実行
     run_analysis(db, topic.id)
+    print("32名×4日間の実テストデータ投入および最新合意形成レポート (v2.0) の編纂が完了しました。")
+
+
+def ensure_seeded(db: Session) -> None:
+    """起動時にトピック＆初期論点を整備し、32名×4日間のテスト実データを永続化する。"""
+    topic = seed_initial_topic_and_statements(db)
+
+    # ユーザーがすでに30名以上存在している場合は二重投入しない（実運用・テストデータを維持）
+    user_count = db.scalar(select(func.count(User.id)).where(User.handle != "運営チーム")) or 0
+    if user_count >= 30:
+        return
+
+    # 32名×4日間のテスト実データを投入
+    seed_4days_32personas(db, topic)
