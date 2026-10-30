@@ -35,8 +35,11 @@ COPY backend/ ./
 # Copy built frontend from Stage 1 into backend static directory
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 
+# Ensure SQLite data directory exists
+RUN mkdir -p /app/backend/data
+
 # Expose port
 EXPOSE 8000
 
-# Run uvicorn server
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run uvicorn server with dynamic PORT support
+CMD ["sh", "-c", "uv run uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
