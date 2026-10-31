@@ -2,7 +2,7 @@ import { useState } from "react";
 import { BrowserRouter, Link, Route, Routes, useNavigate, useParams, useLocation } from "react-router-dom";
 import { api } from "./api";
 import { AuthProvider, useAuth } from "./auth";
-import { StatementModal } from "./components/Common";
+import { clickable, Loading, StatementModal, useModal } from "./components/Common";
 import {
   DiagnosisTab,
   OpinionMapTab,
@@ -21,6 +21,7 @@ function ProfileModal({ onClose }: { onClose: () => void }) {
   const [handle, setHandle] = useState(user?.handle ?? "参加者");
   const [attrs, setAttrs] = useState<Record<string, string>>(user?.attributes ?? {});
   const { busy, error, exec } = useAction();
+  useModal(onClose);
 
   const submit = () =>
     exec(async () => {
@@ -29,11 +30,11 @@ function ProfileModal({ onClose }: { onClose: () => void }) {
     });
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content card" style={{ maxWidth: 520, margin: "auto" }} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-content" role="dialog" aria-modal="true" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.85rem" }}>
           <h3 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 800 }}>👤 プロフィールの変更</h3>
-          <button type="button" className="btn btn-sm" onClick={onClose}>✕</button>
+          <button type="button" className="btn btn-sm" aria-label="閉じる" onClick={onClose}>✕</button>
         </div>
         <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginBottom: "1rem" }}>
           あなたの投票履歴や参加データ（ID）を維持したまま、表示名や属性を更新できます。
@@ -227,8 +228,6 @@ function TopicListPage() {
 
   return (
     <div>
-      {!user && <RegisterPanel />}
-
       {/* Hero Banner */}
       <div className="topic-hero">
         <div style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}>
@@ -245,6 +244,8 @@ function TopicListPage() {
           言い争うのではなく、短い原則への投票と背景ストーリーの追体験を通じて、立場ごとの分岐点と共通原則を明らかにした成果物を自動編纂します。
         </p>
       </div>
+
+      {!user && <RegisterPanel />}
 
       {/* Actions bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem", flexWrap: "wrap", gap: "0.75rem" }}>
@@ -448,7 +449,7 @@ function TopicListPage() {
         </div>
       )}
 
-      {loading && <div className="card" style={{ textAlign: "center" }}>読み込み中…</div>}
+      {loading && !topics && <Loading />}
       {error && <div className="error-box">{error}</div>}
 
       {/* Topic Card List */}
@@ -457,7 +458,7 @@ function TopicListPage() {
           <div
             key={t.id}
             className="card card-interactive"
-            onClick={() => navigate(`/topics/${t.id}`)}
+            {...clickable(() => navigate(`/topics/${t.id}`))}
           >
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.5rem", alignItems: "center" }}>
               <span className="badge badge-consensus">参加者 {t.n_participants}名</span>
@@ -483,6 +484,15 @@ function TopicListPage() {
 
 type TabKey = "vote" | "list" | "post" | "map" | "diagnosis" | "report";
 
+const TABS: { key: TabKey; icon: string; label: string; short: string }[] = [
+  { key: "vote", icon: "🗳️", label: "投票する", short: "投票" },
+  { key: "list", icon: "📋", label: "原則と原体験", short: "原則一覧" },
+  { key: "post", icon: "✨", label: "体験から投稿", short: "声から投稿" },
+  { key: "map", icon: "🗺️", label: "意見マップ", short: "意見マップ" },
+  { key: "diagnosis", icon: "🎯", label: "あなたの診断", short: "診断" },
+  { key: "report", icon: "📄", label: "成果物", short: "成果物" },
+];
+
 function TopicDetailPage() {
   const { id } = useParams();
   const topicId = Number(id);
@@ -494,9 +504,15 @@ function TopicDetailPage() {
   const [tab, setTab] = useState<TabKey>("vote");
   const [modalSid, setModalSid] = useState<number | null>(null);
 
-  if (loading && !topic) return <div className="card" style={{ textAlign: "center" }}>読み込み中…</div>;
+  if (loading && !topic) return <Loading label="トピックを読み込み中…" />;
   if (error) return <div className="error-box">{error}</div>;
   if (!topic) return null;
+
+  const tabBadge = (key: TabKey) => {
+    if (key === "vote") return ` (${topic.my_progress.voted}/${topic.my_progress.total})`;
+    if (key === "report" && topic.report_version) return ` v${topic.report_version}`;
+    return "";
+  };
 
   return (
     <div>
@@ -534,82 +550,25 @@ function TopicDetailPage() {
             </span>
           </div>
         )}
-
-        {/* Export Actions for Participants & Admins */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.6rem", marginTop: "1rem", paddingTop: "0.85rem", borderTop: "1px solid var(--border-subtle)" }}>
-          <div style={{ fontSize: "0.82rem", color: "var(--text-muted)", fontWeight: 800 }}>
-            📥 投票結果・集計データの入手（Excel対応CSV）:
-          </div>
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-            <a
-              href={`/api/topics/${topicId}/export/votes.csv`}
-              download
-              className="btn btn-sm btn-primary"
-              style={{ textDecoration: "none", fontSize: "0.82rem", padding: "0.35rem 0.8rem", display: "inline-flex", alignItems: "center", gap: "0.4rem" }}
-            >
-              <span>📊</span>
-              <span>投票・集計結果 (CSV)</span>
-            </a>
-            <a
-              href={`/api/topics/${topicId}/export/stories.csv`}
-              download
-              className="btn btn-sm"
-              style={{ textDecoration: "none", fontSize: "0.82rem", padding: "0.35rem 0.8rem", display: "inline-flex", alignItems: "center", gap: "0.4rem", background: "#ffffff", border: "1px solid var(--border-subtle)" }}
-            >
-              <span>📖</span>
-              <span>原体験一覧 (CSV)</span>
-            </a>
-          </div>
-        </div>
       </div>
 
       {/* Position Selector Bar */}
       {user && <PositionSelector topic={topic} onSaved={setData} />}
 
       {/* Desktop & Tablet Navigation Tabs */}
-      <div className="tabs-nav">
-        <button
-          type="button"
-          className={`tab-link ${tab === "vote" ? "active" : ""}`}
-          onClick={() => setTab("vote")}
-        >
-          🗳️ 1. 投票する ({topic.my_progress.voted}/{topic.my_progress.total})
-        </button>
-        <button
-          type="button"
-          className={`tab-link ${tab === "list" ? "active" : ""}`}
-          onClick={() => setTab("list")}
-        >
-          📋 2. 原則と原体験一覧
-        </button>
-        <button
-          type="button"
-          className={`tab-link ${tab === "post" ? "active" : ""}`}
-          onClick={() => setTab("post")}
-        >
-          ✨ 3. 不満・体験から投稿
-        </button>
-        <button
-          type="button"
-          className={`tab-link ${tab === "map" ? "active" : ""}`}
-          onClick={() => setTab("map")}
-        >
-          🗺️ 4. 意見マップ・立場のレンズ
-        </button>
-        <button
-          type="button"
-          className={`tab-link ${tab === "diagnosis" ? "active" : ""}`}
-          onClick={() => setTab("diagnosis")}
-        >
-          🎯 5. あなたの診断
-        </button>
-        <button
-          type="button"
-          className={`tab-link ${tab === "report" ? "active" : ""}`}
-          onClick={() => setTab("report")}
-        >
-          📄 6. 成果物ドキュメント {topic.report_version ? `(v${topic.report_version})` : ""}
-        </button>
+      <div className="tabs-nav" role="tablist">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.key}
+            className={`tab-link ${tab === t.key ? "active" : ""}`}
+            onClick={() => setTab(t.key)}
+          >
+            {t.icon} {t.label}{tabBadge(t.key)}
+          </button>
+        ))}
       </div>
 
       {/* Tab Contents */}
@@ -656,54 +615,21 @@ function TopicDetailPage() {
       {/* Mobile Ergonomic Bottom Navigation Bar */}
       <nav className="mobile-bottom-nav">
         <div className="mobile-bottom-nav-inner">
-          <button
-            type="button"
-            className={`bottom-nav-item ${tab === "vote" ? "active" : ""}`}
-            onClick={() => setTab("vote")}
-          >
-            <span className="bottom-nav-item-icon">🗳️</span>
-            <span>投票</span>
-          </button>
-          <button
-            type="button"
-            className={`bottom-nav-item ${tab === "list" ? "active" : ""}`}
-            onClick={() => setTab("list")}
-          >
-            <span className="bottom-nav-item-icon">📋</span>
-            <span>原則一覧</span>
-          </button>
-          <button
-            type="button"
-            className={`bottom-nav-item ${tab === "post" ? "active" : ""}`}
-            onClick={() => setTab("post")}
-          >
-            <span className="bottom-nav-item-icon">✨</span>
-            <span>声から投稿</span>
-          </button>
-          <button
-            type="button"
-            className={`bottom-nav-item ${tab === "map" ? "active" : ""}`}
-            onClick={() => setTab("map")}
-          >
-            <span className="bottom-nav-item-icon">🗺️</span>
-            <span>意見マップ</span>
-          </button>
-          <button
-            type="button"
-            className={`bottom-nav-item ${tab === "diagnosis" ? "active" : ""}`}
-            onClick={() => setTab("diagnosis")}
-          >
-            <span className="bottom-nav-item-icon">🎯</span>
-            <span>診断</span>
-          </button>
-          <button
-            type="button"
-            className={`bottom-nav-item ${tab === "report" ? "active" : ""}`}
-            onClick={() => setTab("report")}
-          >
-            <span className="bottom-nav-item-icon">📄</span>
-            <span>成果物</span>
-          </button>
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              aria-current={tab === t.key ? "page" : undefined}
+              className={`bottom-nav-item ${tab === t.key ? "active" : ""}`}
+              onClick={() => {
+                setTab(t.key);
+                window.scrollTo({ top: 0 });
+              }}
+            >
+              <span className="bottom-nav-item-icon">{t.icon}</span>
+              <span>{t.short}</span>
+            </button>
+          ))}
         </div>
       </nav>
     </div>
@@ -736,7 +662,7 @@ function ContributionsPage() {
         </p>
       </div>
 
-      {loading && <div className="card" style={{ textAlign: "center" }}>読み込み中…</div>}
+      {loading && !items && <Loading />}
       {error && <div className="error-box">{error}</div>}
 
       {items && items.length === 0 && (
@@ -793,10 +719,16 @@ function Header() {
               自分の貢献
             </Link>
             {user && (
-              <div className="nav-user-pill" style={{ cursor: "pointer" }} onClick={() => setShowProfileModal(true)}>
-                <span>👤 {user.handle}</span>
-                <span style={{ fontSize: "0.75rem", color: "var(--brand-blue)", fontWeight: 700 }}>✏️ 変更</span>
-              </div>
+              <button
+                type="button"
+                className="nav-user-pill"
+                title="表示名・属性を変更"
+                onClick={() => setShowProfileModal(true)}
+              >
+                <span aria-hidden="true">👤</span>
+                <span className="nav-user-name">{user.handle}</span>
+                <span className="nav-user-edit">✏️ 変更</span>
+              </button>
             )}
           </nav>
         </div>

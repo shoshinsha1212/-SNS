@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import {
   api,
   type AnonymizeResponse,
@@ -19,6 +19,46 @@ import {
   SECTION_LABEL,
   STORY_KIND_LABEL,
 } from "../labels";
+
+export function Loading({ label = "読み込み中…" }: { label?: string }) {
+  return (
+    <div className="card loading-card" role="status">
+      <span className="spinner" aria-hidden="true" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+/** div のカードをボタンのように Tab / Enter / Space で操作できるようにする */
+export function clickable(onClick: () => void) {
+  return {
+    role: "button",
+    tabIndex: 0,
+    onClick,
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onClick();
+      }
+    },
+  };
+}
+
+/** モーダル表示中は Esc で閉じ、背面のスクロールを止める */
+export function useModal(onClose: () => void) {
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+}
 
 export function PositionRateBars({
   rates,
@@ -185,6 +225,7 @@ export function StatementModal({
   const [stance, setStance] = useState<Stance>("supports");
   const [storyBody, setStoryBody] = useState("");
   const [anonPreview, setAnonPreview] = useState<AnonymizeResponse | null>(null);
+  useModal(onClose);
 
   const doVote = (val: VoteValue) =>
     voteAct.exec(async () => {
@@ -223,7 +264,7 @@ export function StatementModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
           <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <span style={{ fontWeight: 800, fontSize: "0.95rem", color: "var(--brand-primary)" }}>
@@ -238,7 +279,7 @@ export function StatementModal({
               <span className="badge">{ORIGIN_LABEL[detail.origin]}</span>
             )}
           </div>
-          <button type="button" className="btn btn-sm" onClick={onClose} style={{ borderRadius: "50%", width: 32, height: 32, padding: 0 }}>
+          <button type="button" className="btn btn-sm" aria-label="閉じる" onClick={onClose} style={{ borderRadius: "50%", width: 32, height: 32, padding: 0 }}>
             ✕
           </button>
         </div>

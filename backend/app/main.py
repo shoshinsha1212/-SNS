@@ -1232,11 +1232,13 @@ if _frontend_dist.exists():
         # APIルートは除外
         if full_path.startswith("api"):
             raise HTTPException(status_code=404, detail="API endpoint not found")
-        file_path = _frontend_dist / full_path
-        if file_path.is_file():
+        # ".." で dist の外（DB や設定ファイル）を読ませない
+        file_path = (_frontend_dist / full_path).resolve()
+        if file_path.is_relative_to(_frontend_dist.resolve()) and file_path.is_file():
             return FileResponse(file_path)
         index_file = _frontend_dist / "index.html"
         if index_file.exists():
-            return FileResponse(index_file)
+            # デプロイ後に古い index.html（古い JS を指す）が残らないよう毎回確認させる
+            return FileResponse(index_file, headers={"Cache-Control": "no-cache"})
         raise HTTPException(status_code=404, detail="Frontend build not found")
 

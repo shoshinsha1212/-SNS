@@ -22,7 +22,7 @@ import {
   SECTION_LABEL,
   SECTION_ORDER,
 } from "../labels";
-import { PositionRateBars, StoryCardView } from "./Common";
+import { clickable, Loading, PositionRateBars, StoryCardView } from "./Common";
 
 export function PositionSelector({
   topic,
@@ -35,6 +35,9 @@ export function PositionSelector({
     ...topic.my_positions,
   }));
   const { busy, error, exec } = useAction();
+  const allChosen = topic.axes.length > 0 && topic.axes.every((ax) => selected[String(ax.id)] !== undefined);
+  // 立場を選び終えた人には1行の要約だけ見せ、投票カードを上に寄せる
+  const [editing, setEditing] = useState(!allChosen);
 
   const pickOption = (axisId: number, optId: number) => {
     const next = { ...selected, [String(axisId)]: optId };
@@ -44,6 +47,24 @@ export function PositionSelector({
       onSaved(updated);
     });
   };
+
+  if (!editing && allChosen) {
+    const chosenLabels = topic.axes
+      .map((ax) => ax.options.find((o) => o.id === selected[String(ax.id)])?.label)
+      .filter(Boolean)
+      .join(" ／ ");
+    return (
+      <div className="card position-summary" style={{ borderLeft: "4px solid var(--brand-blue)" }}>
+        <div style={{ fontSize: "0.88rem", color: "var(--text-body)" }}>
+          <span style={{ fontWeight: 800, color: "var(--text-main)" }}>あなたの立場：</span>
+          {chosenLabels}
+        </div>
+        <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
+          ✏️ 立場を変更
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="card" style={{ borderLeft: "4px solid var(--brand-blue)", background: "#ffffff" }}>
@@ -88,6 +109,14 @@ export function PositionSelector({
           </div>
         ))}
       </div>
+
+      {allChosen && (
+        <div style={{ marginTop: "1rem", textAlign: "right" }}>
+          <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => setEditing(false)}>
+            ✓ 決定して閉じる
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -110,14 +139,20 @@ export function VoteTab({
     vote: VoteResponse;
   } | null>(null);
   const { busy, error: voteError, exec } = useAction();
+  const [reviewing, setReviewing] = useState(false);
 
   const total = stmts?.length ?? 0;
   const votedCount = stmts?.filter((s) => s.my_vote !== null).length ?? 0;
   const progressPct = total > 0 ? Math.round((votedCount / total) * 100) : 0;
+  const allVoted = total > 0 && votedCount === total;
 
-  // Active statement
+  // Active statement（全問投票済みなら、見直し中以外は完了画面を出す）
   const activeStatement: StatementListItem | null =
-    stmts && stmts.length > 0 ? stmts[Math.min(currentIndex, stmts.length - 1)] : null;
+    stmts && stmts.length > 0 && (!allVoted || reviewing)
+      ? stmts[Math.min(currentIndex, stmts.length - 1)]
+      : null;
+
+  if (!stmts) return <Loading />;
 
   const castVote = (sid: number, text: string, n_stories: number, val: VoteValue) =>
     exec(async () => {
@@ -260,6 +295,16 @@ export function VoteTab({
             </button>
           </div>
         </div>
+      ) : total === 0 ? (
+        <div className="vote-card" style={{ padding: "3rem 1.5rem" }}>
+          <div style={{ fontSize: "2.4rem", marginBottom: "0.5rem" }}>🌱</div>
+          <h2 style={{ fontSize: "1.2rem", fontWeight: 800, margin: "0.5rem 0" }}>
+            まだ投票できる原則がありません
+          </h2>
+          <p style={{ color: "var(--text-muted)", fontSize: "0.92rem", margin: 0 }}>
+            「体験から投稿」タブから、最初の原則を投稿してみましょう。
+          </p>
+        </div>
       ) : (
         <div className="vote-card" style={{ padding: "3rem 1.5rem" }}>
           <div style={{ fontSize: "2.8rem", marginBottom: "0.5rem" }}>🎉</div>
@@ -276,7 +321,10 @@ export function VoteTab({
             <button
               type="button"
               className="btn"
-              onClick={() => setCurrentIndex(0)}
+              onClick={() => {
+                setCurrentIndex(0);
+                setReviewing(true);
+              }}
             >
               回答を見直す・修正する
             </button>
@@ -586,7 +634,7 @@ export function StatementListTab({
   const [filter, setFilter] = useState<Section | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  if (loading && !items) return <div className="card" style={{ textAlign: "center" }}>読み込み中…</div>;
+  if (loading && !items) return <Loading />;
   if (error) return <div className="error-box">{error}</div>;
 
   const filteredBySection = (items ?? []).filter((it) => filter === "all" || it.section === filter);
@@ -683,7 +731,7 @@ export function StatementListTab({
           <div
             key={st.id}
             className="card card-interactive"
-            onClick={() => onOpenStatement(st.id)}
+            {...clickable(() => onOpenStatement(st.id))}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.45rem" }}>
               <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", alignItems: "center" }}>
@@ -743,7 +791,7 @@ export function OpinionMapTab({
     groups: Record<string, string>;
   }>(null);
 
-  if (loading && !map) return <div className="card" style={{ textAlign: "center" }}>読み込み中…</div>;
+  if (loading && !map) return <Loading />;
   if (error) return <div className="error-box">{error}</div>;
   if (!map) return null;
 
@@ -945,7 +993,7 @@ export function OpinionMapTab({
                 key={ts.id}
                 className="card-subtle"
                 style={{ padding: "0.65rem 0.85rem", marginBottom: "0.5rem", cursor: "pointer" }}
-                onClick={() => onOpenStatement(ts.id)}
+                {...clickable(() => onOpenStatement(ts.id))}
               >
                 <div style={{ fontSize: "0.92rem", fontWeight: 700, color: "var(--brand-blue)" }}>
                   {ts.text}
@@ -971,7 +1019,7 @@ export function DiagnosisTab({
 }) {
   const { data: diag, loading, error } = useAsync(() => api.getDiagnosis(topicId), [topicId]);
 
-  if (loading && !diag) return <div className="card" style={{ textAlign: "center" }}>読み込み中…</div>;
+  if (loading && !diag) return <Loading />;
   if (error) return <div className="error-box">{error}</div>;
   if (!diag) return null;
 
@@ -1028,7 +1076,7 @@ export function DiagnosisTab({
                   key={d.statement_id}
                   className="card card-interactive"
                   style={{ padding: "1rem", borderLeft: "4px solid var(--boundary-border)", background: "var(--boundary-bg)" }}
-                  onClick={() => onOpenStatement(d.statement_id)}
+                  {...clickable(() => onOpenStatement(d.statement_id))}
                 >
                   <div style={{ fontWeight: 800, fontSize: "0.98rem", color: "var(--text-main)" }}>
                     #{d.statement_id} {d.text}
@@ -1115,9 +1163,13 @@ export function ReportTab({
 
   const copyMarkdown = () => {
     if (report?.body_md) {
-      navigator.clipboard.writeText(report.body_md);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      navigator.clipboard
+        .writeText(report.body_md)
+        .then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        })
+        .catch(() => analyzeAct.setError("クリップボードにコピーできませんでした。"));
     }
   };
 
@@ -1177,12 +1229,22 @@ export function ReportTab({
         {analyzeAct.error && <div className="error-box" style={{ marginTop: "0.75rem" }}>{analyzeAct.error}</div>}
       </div>
 
-      {loading && !report && <div className="card" style={{ textAlign: "center" }}>読み込み中…</div>}
-      {error && <div className="error-box">{error}</div>}
+      {loading && !report && <Loading />}
+      {versions && versions.length === 0 ? (
+        <div className="card" style={{ textAlign: "center", padding: "2.5rem 1.5rem" }}>
+          <div style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>📄</div>
+          <h3 style={{ margin: "0 0 0.5rem" }}>まだ成果物はありません</h3>
+          <p style={{ color: "var(--text-muted)", margin: 0 }}>
+            投票が集まったら「最新の投票で成果物を更新」を押すと、共通原則と分岐点をまとめた成果物が作られます。
+          </p>
+        </div>
+      ) : (
+        error && <div className="error-box">{error}</div>
+      )}
 
       {/* Report Document Body */}
       {report && (
-        <div className="card" style={{ padding: "2.5rem 2rem", background: "#ffffff", boxShadow: "var(--shadow-float)" }}>
+        <div className="card report-body" style={{ padding: "clamp(1.25rem, 4vw, 2.5rem)", boxShadow: "var(--shadow-float)" }}>
           <ReactMarkdown
             components={{
               a: ({ href, children }) => {
