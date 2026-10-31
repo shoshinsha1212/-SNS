@@ -89,6 +89,73 @@ def test_algorithm_metrics():
     assert qmap[1] < 0.01 and qmap[2] > 0.5
 
 
+def _add_test_voters(db, topic_id: int, n: int = 30) -> None:
+    """テスト用の投票者（is_synthetic=True）を作る。第1軸の2つの立場で半々に分け、
+    最初の3問は全員賛成（共通原則）、4・5問目は立場で賛否が割れる（分岐点）ようにする。"""
+    td = api_get_topic(topic_id, user=None, db=db)
+    axis = td["axes"][0]
+    for i in range(n):
+        u = User(handle=f"テスト投票者{i}", token=f"test-voter-{topic_id}-{i}", is_synthetic=True)
+        db.add(u)
+        db.commit()
+        side = i % 2
+        api_put_positions(
+            topic_id,
+            PutPositionsReq(positions={str(axis["id"]): axis["options"][side]["id"]}),
+            user=u,
+            db=db,
+        )
+        stmts = api_list_statements(topic_id, user=u, db=db)
+        for idx, s in enumerate(stmts):
+            if idx < 3:
+                value = 1
+            elif idx < 5:
+                value = 1 if side == 0 else -1
+            else:
+                value = 1 if (i + idx) % 3 else -1
+            api_vote_statement(s["id"], VoteReq(value=value), user=u, db=db)
+
+
+def test_seed_creates_no_fake_participants_and_purges_legacy_personas():
+    """シードは架空の参加者・票・レポートを作らず、以前のペルソナは起動時に消えること。"""
+    from app.models import Story, VoteEvent
+    from app.seed import LEGACY_PERSONA_HANDLES
+
+    init_db()
+    with SessionLocal() as db:
+        ensure_seeded(db)
+        topics = api_list_topics(db=db)
+        assert len(topics) == 13
+        assert all(t["n_participants"] == 0 for t in topics)
+        assert all(t["report_version"] is None for t in topics)
+
+        # 以前のバージョンが作ったペルソナを再現し、実在の参加者と一緒に置く
+        topic_id = topics[0]["id"]
+        stmt_id = api_list_statements(topic_id, user=None, db=db)[0]["id"]
+        persona = User(handle=sorted(LEGACY_PERSONA_HANDLES)[0], token="legacy-persona", trust_level=2)
+        real = User(handle=sorted(LEGACY_PERSONA_HANDLES)[0], token="real-same-name", device_id="dev-1")
+        db.add_all([persona, real])
+        db.commit()
+        api_vote_statement(stmt_id, VoteReq(value=1), user=persona, db=db)
+        api_vote_statement(stmt_id, VoteReq(value=-1), user=real, db=db)
+        db.add(Story(author_id=persona.id, topic_id=topic_id, body="架空の体験談"))
+        from app.models import Statement
+
+        seed_by_persona = Statement(topic_id=topic_id, author_id=persona.id, body="初期論点", origin="seed")
+        proposed_by_persona = Statement(topic_id=topic_id, author_id=persona.id, body="架空の起案", origin="user")
+        db.add_all([seed_by_persona, proposed_by_persona])
+        db.commit()
+
+        ensure_seeded(db)
+        assert db.get(Statement, seed_by_persona.id) is not None
+        assert db.get(Statement, proposed_by_persona.id) is None
+        assert db.get(User, persona.id) is None
+        assert db.get(User, real.id) is not None
+        assert db.scalars(select(VoteEvent).where(VoteEvent.user_id == persona.id)).first() is None
+        assert db.scalars(select(VoteEvent).where(VoteEvent.user_id == real.id)).first() is not None
+        assert db.scalars(select(Story).where(Story.author_id == persona.id)).first() is None
+
+
 def test_full_api_flow():
     """シードデータからユーザー登録・立場選択・投票・診断・意見マップ・成果物生成までの一連の流れを検証。"""
     init_db()
@@ -102,6 +169,10 @@ def test_full_api_flow():
         topics = api_list_topics(db=db)
         assert len(topics) >= 1
         topic_id = topics[0]["id"]
+
+        _add_test_voters(db, topic_id)
+        api_analyze_topic(topic_id, db=db)
+        topics = api_list_topics(db=db)
         assert topics[0]["n_participants"] >= 30
         assert topics[0]["report_version"] is not None
 
@@ -191,9 +262,32 @@ def test_full_api_flow():
         )
         assert new_topic["id"] > topic_id
 
+        # 分岐点に体験談を付けてから再編纂すると、レポートに体験談の引用 [T:] が入る
+        api_post_story(
+            div_sid,
+            PostStoryReq(kind="present", body="授業で実際に困った経験があり、この論点には賛成です。", stance="supports"),
+            user=user,
+            db=db,
+        )
+        api_analyze_topic(topic_id, db=db)
         rep = api_get_latest_report(topic_id, db=db)
         assert "[S:" in rep["body_md"]
         assert "[T:" in rep["body_md"]
 
         contribs = api_get_contributions(user=user, db=db)
         assert isinstance(contribs, list)
+
+
+def test_spa_route_does_not_serve_files_outside_dist():
+    """`..` を含むパスで dist の外（pyproject.toml や DB）が読めないこと。"""
+    import app.main as main_mod
+    from fastapi.testclient import TestClient
+
+    if not main_mod._frontend_dist.exists():
+        import pytest
+
+        pytest.skip("frontend/dist が無いため SPA ルートが登録されていない")
+    client = TestClient(main_mod.app)
+    for path in ("/..%2F..%2Fbackend%2Fpyproject.toml", "/%2e%2e/%2e%2e/backend/pyproject.toml"):
+        res = client.get(path)
+        assert "[project]" not in res.text
