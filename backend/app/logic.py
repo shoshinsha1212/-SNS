@@ -72,6 +72,19 @@ def topic_results(db: Session, topic: Topic, user: User | None) -> dict:
         st_vs = [v for v in vs if v.user_id in students and v.value != 0]
         st_n = len(st_vs)
         st_rate = (sum(1 for v in st_vs if v.value == 1) / st_n) if st_n >= MIN_N else None
+        # Polis のグループ比較の代わりに、属性で分けた賛否を返す
+        groups = []
+        for key, label, members in (
+            ("student", "大学生", [v for v in vs if v.user_id in students]),
+            ("other", "それ以外・未回答", [v for v in vs if v.user_id not in students]),
+        ):
+            groups.append({
+                "key": key,
+                "label": label,
+                "agree": sum(1 for v in members if v.value == 1),
+                "disagree": sum(1 for v in members if v.value == -1),
+                "pass": sum(1 for v in members if v.value == 0),
+            })
         mine = next((v for v in vs if user and v.user_id == user.id), None)
         my_vote = mine.value if mine else None
         same_rate = None
@@ -105,6 +118,7 @@ def topic_results(db: Session, topic: Topic, user: User | None) -> dict:
             "n": n,
             "agree_rate": rate,
             "student_agree_rate": st_rate,
+            "groups": groups,
             "label": _label(rate, n),
             "my_vote": my_vote,
             "my_reason": mine.reason if mine else None,

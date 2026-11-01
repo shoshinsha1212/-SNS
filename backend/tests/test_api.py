@@ -70,6 +70,9 @@ def test_answer_results_and_opposite_side(client):
     # 反対側（賛成した人）の理由が見える
     assert first["reasons"]["agree"] and first["reasons"]["agree"][0]["text"] == "自分の経験からそう思う"
     assert r["summary"]["most_minority"]["id"] == first["id"]
+    groups = {g["key"]: g for g in first["groups"]}
+    assert groups["other"]["agree"] == 6 and groups["other"]["disagree"] == 1
+    assert groups["student"]["agree"] == 0
     assert r["summary"]["n_majority"] == len(r["statements"]) - 1
 
 

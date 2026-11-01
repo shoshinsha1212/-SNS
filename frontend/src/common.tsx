@@ -47,7 +47,7 @@ export function PrivacyNote() {
 }
 
 /** 通報ボタン。一度押したら「通報済み」になる。 */
-export function FlagButton({ type, id, onHidden }: { type: FlagTarget; id: number; onHidden?: () => void }) {
+export function FlagButton({ type, id, onHidden, label = "通報" }: { type: FlagTarget; id: number; onHidden?: () => void; label?: string }) {
   const [state, setState] = useState<"idle" | "sending" | "done">("idle");
   if (state === "done") return <span className="flag done">通報しました</span>;
   return (
@@ -68,7 +68,7 @@ export function FlagButton({ type, id, onHidden }: { type: FlagTarget; id: numbe
         }
       }}
     >
-      ⚑ 通報
+      ⚑ {label}
     </button>
   );
 }

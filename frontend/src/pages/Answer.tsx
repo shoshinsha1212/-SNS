@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, track, type TopicDetail } from "../api";
-import { Collapse, Loading, PrivacyNote, useLoad, useMeta } from "../common";
+import { Loading, PrivacyNote, useLoad, useMeta } from "../common";
 
 /** 最初の回答の前に1回だけ聞く任意の属性。 */
 function ProfilePrompt({ onDone }: { onDone: () => void }) {
@@ -74,14 +74,36 @@ function AddStatement({ topic, onAdded }: { topic: TopicDetail; onAdded: () => v
   const [body, setBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [added, setAdded] = useState(false);
   return (
-    <Collapse label="この議題に論点を追加する">
-      <p className="muted small">賛成・反対で答えられる一文にしてください（5〜100字）。追加した論点は、ほかの人の質問にも出ます。</p>
-      <textarea value={body} maxLength={100} rows={2} onChange={(e) => setBody(e.target.value)} placeholder="例：〇〇は△△すべきだ" />
+    <section className="card composer">
+      <h3>まだ出ていない意見はありますか？</h3>
+      <p className="muted small">
+        あなたの意見を1文で書くと、ほかの参加者がそれに賛成・反対で答えます。
+      </p>
+      <ul className="tips small muted">
+        <li>考えは1つだけにする</li>
+        <li>賛成・反対で答えられる形にする（「〇〇すべきだ」など）</li>
+        <li>すでにある論点と同じ内容は避ける</li>
+      </ul>
+      <textarea
+        value={body}
+        maxLength={100}
+        rows={2}
+        onChange={(e) => {
+          setBody(e.target.value);
+          setAdded(false);
+        }}
+        placeholder={`「${topic.title}」について、あなたの意見`}
+      />
+      <div className="row between">
+        <span className="small muted">{body.trim().length} / 100字</span>
+      </div>
       <PrivacyNote />
       {error && <p className="error-text">{error}</p>}
+      {added && <p className="small agree-text">意見を追加しました。ほかの人の質問にも出ます。</p>}
       <button
-        className="btn small"
+        className="btn primary small"
         disabled={busy || body.trim().length < 5}
         onClick={async () => {
           setBusy(true);
@@ -89,6 +111,7 @@ function AddStatement({ topic, onAdded }: { topic: TopicDetail; onAdded: () => v
           try {
             await api.addStatement(topic.id, { body });
             setBody("");
+            setAdded(true);
             onAdded();
           } catch (e) {
             setError((e as Error).message);
@@ -97,9 +120,9 @@ function AddStatement({ topic, onAdded }: { topic: TopicDetail; onAdded: () => v
           }
         }}
       >
-        追加する
+        意見を投稿する
       </button>
-    </Collapse>
+    </section>
   );
 }
 
@@ -145,6 +168,7 @@ export default function Answer() {
 
   const answeredCount = Object.keys(votes).length;
   const myPrev = votes[String(current.id)]?.value;
+  const remaining = stmts.length - answeredCount;
 
   const vote = async (value: number) => {
     setBusy(true);
@@ -181,25 +205,30 @@ export default function Answer() {
             <span style={{ width: `${(answeredCount / stmts.length) * 100}%` }} />
           </div>
           <span className="small muted">
-            {answeredCount} / {stmts.length}
+            {remaining > 0 ? `残り${remaining}問` : "すべて回答済み"}
           </span>
         </div>
       </div>
 
-      <div className="card statement-card">
-        <p className="small muted">
-          {index + 1}問目{current.origin === "user" && "（参加者が追加した論点）"}
-        </p>
-        <p className="statement-body">{current.body}</p>
+      <div className="card statement-card" key={current.id}>
+        <div className="speaker">
+          <span className={`avatar ${current.origin === "user" ? "user" : "seed"}`} aria-hidden>
+            {current.origin === "user" ? "参" : "運"}
+          </span>
+          <span className="small muted">
+            {current.origin === "user" ? "参加者の意見" : "運営が用意した論点"} ・ {index + 1} / {stmts.length}
+          </span>
+        </div>
+        <blockquote className="statement-body">{current.body}</blockquote>
         <div className="vote-buttons">
           <button className={`btn vote agree ${myPrev === 1 ? "on" : ""}`} disabled={busy} onClick={() => vote(1)}>
-            賛成
+            <span className="icon" aria-hidden>✓</span>賛成
           </button>
           <button className={`btn vote disagree ${myPrev === -1 ? "on" : ""}`} disabled={busy} onClick={() => vote(-1)}>
-            反対
+            <span className="icon" aria-hidden>✕</span>反対
           </button>
           <button className={`btn vote pass ${myPrev === 0 ? "on" : ""}`} disabled={busy} onClick={() => vote(0)}>
-            わからない
+            <span className="icon" aria-hidden>?</span>わからない
           </button>
         </div>
         {showReason ? (

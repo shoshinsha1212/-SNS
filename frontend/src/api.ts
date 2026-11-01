@@ -134,6 +134,7 @@ export type StatementResult = {
   n: number;
   agree_rate: number | null;
   student_agree_rate: number | null;
+  groups: { key: string; label: string; agree: number; disagree: number; pass: number }[];
   label: "few" | "consensus_agree" | "consensus_disagree" | "divided" | "leaning";
   my_vote: number | null;
   my_reason: string | null;

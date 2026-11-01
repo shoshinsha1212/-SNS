@@ -7,28 +7,74 @@ const LABEL: Record<StatementResult["label"], string | null> = {
   consensus_agree: "みんな賛成で一致",
   consensus_disagree: "みんな反対で一致",
   divided: "意見が割れている",
-  leaning: "どちらかといえば",
+  leaning: null,
   few: null,
 };
 
-function Bar({ s }: { s: StatementResult }) {
-  if (s.n === 0) return <p className="small muted">まだ賛成・反対の回答がありません</p>;
-  const a = (s.agree / s.n) * 100;
+// Polis のレポートにならい、合意点と割れた論点を分けて見せる
+const SECTIONS: { key: string; title: string; description: string; labels: StatementResult["label"][] }[] = [
+  {
+    key: "consensus",
+    title: "みんなの合意点",
+    description: "賛成・反対を選んだ人の7割以上が同じ答えだった論点です。",
+    labels: ["consensus_agree", "consensus_disagree"],
+  },
+  {
+    key: "divided",
+    title: "意見が割れた論点",
+    description: "賛成と反対がほぼ半々（4〜6割）に分かれた論点です。",
+    labels: ["divided"],
+  },
+  {
+    key: "other",
+    title: "そのほかの論点",
+    description: "どちらかに傾いているものと、まだ回答が少ないものです。",
+    labels: ["leaning", "few"],
+  },
+];
+
+/** Polis と同じく、賛成・反対・わからないの3色で、答えた人全体に対する割合を見せる。 */
+function Bar({ agree, disagree, pass, compact }: { agree: number; disagree: number; pass: number; compact?: boolean }) {
+  const total = agree + disagree + pass;
+  if (total === 0) return <p className="small muted">まだ回答がありません</p>;
+  const w = (n: number) => `${(n / total) * 100}%`;
   return (
-    <div className="bar-wrap">
-      <div className="bar" aria-label={`賛成 ${Math.round(a)}%、反対 ${Math.round(100 - a)}%`}>
-        <span className="agree" style={{ width: `${a}%` }} />
-        <span className="disagree" style={{ width: `${100 - a}%` }} />
+    <div className={`bar-wrap ${compact ? "compact" : ""}`}>
+      <div
+        className="bar"
+        role="img"
+        aria-label={`賛成${agree}人、反対${disagree}人、わからない${pass}人`}
+      >
+        <span className="agree" style={{ width: w(agree) }} />
+        <span className="disagree" style={{ width: w(disagree) }} />
+        <span className="pass" style={{ width: w(pass) }} />
       </div>
-      <div className="row between small">
-        <span className="agree-text">
-          賛成 {pct(s.agree_rate)}（{s.agree}人）
-        </span>
-        <span className="disagree-text">
-          反対 {pct(s.agree_rate == null ? null : 1 - s.agree_rate)}（{s.disagree}人）
-        </span>
-      </div>
-      {s.pass > 0 && <p className="small muted">わからない：{s.pass}人</p>}
+      {!compact && (
+        <div className="legend small">
+          <span className="agree-text">賛成 {pct(agree / total)}</span>
+          <span className="disagree-text">反対 {pct(disagree / total)}</span>
+          <span className="muted">わからない {pct(pass / total)}</span>
+          <span className="muted">（{total}人）</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Groups({ s }: { s: StatementResult }) {
+  const shown = s.groups.filter((g) => g.agree + g.disagree + g.pass > 0);
+  if (shown.length < 2) return null;
+  return (
+    <div className="groups">
+      {shown.map((g) => (
+        <div key={g.key} className="group-row">
+          <span className="small">{g.label}</span>
+          <Bar agree={g.agree} disagree={g.disagree} pass={g.pass} compact />
+          <span className="small muted">
+            賛成 {pct(g.agree + g.disagree ? g.agree / (g.agree + g.disagree) : null)}・{g.agree + g.disagree + g.pass}人
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -107,15 +153,15 @@ function StatementBlock({ s, topicId, minN, onChanged }: { s: StatementResult; t
         {label && <span className={`chip ${s.label}`}>{label}</span>}
       </div>
       <p className="statement-body small-body">{s.body}</p>
-      <Bar s={s} />
-      {s.n > 0 && s.n < minN && <p className="small muted">回答が{minN}人未満のため、割合は参考値です。</p>}
+      <Bar agree={s.agree} disagree={s.disagree} pass={s.pass} />
+      {s.n > 0 && s.n < minN && <p className="small muted">賛成・反対の回答が{minN}人未満のため、割合は参考値です。</p>}
       {s.same_rate != null && s.n >= minN && (
         <p className="small">
-          あなたと同じ意見は <strong>{pct(s.same_rate)}</strong>
+          賛成・反対を選んだ人のうち、あなたと同じ意見は <strong>{pct(s.same_rate)}</strong>
           {s.same_rate < 0.5 ? "（少数派）" : "（多数派）"}
         </p>
       )}
-      {s.student_agree_rate != null && <p className="small muted">大学生の中では 賛成 {pct(s.student_agree_rate)}</p>}
+      <Groups s={s} />
 
       {shownReasons.length > 0 && (
         <div className="reasons">
@@ -141,7 +187,7 @@ function StatementBlock({ s, topicId, minN, onChanged }: { s: StatementResult; t
         <StoryForm statementId={s.id} onPosted={onChanged} />
       </Collapse>
       <div className="row end">
-        <FlagButton type="statement" id={s.id} onHidden={onChanged} />
+        <FlagButton type="statement" id={s.id} onHidden={onChanged} label="この論点を通報" />
       </div>
     </article>
   );
@@ -258,9 +304,21 @@ export default function ResultsPage() {
         )}
       </div>
 
-      {r.statements.map((s) => (
-        <StatementBlock key={s.id} s={s} topicId={id} minN={r.min_n} onChanged={res.reload} />
-      ))}
+      {SECTIONS.map((sec) => {
+        const items = r.statements.filter((s) => sec.labels.includes(s.label));
+        if (items.length === 0) return null;
+        return (
+          <section key={sec.key} className="result-section">
+            <h2>
+              {sec.title} <span className="count">{items.length}</span>
+            </h2>
+            <p className="small muted">{sec.description}</p>
+            {items.map((s) => (
+              <StatementBlock key={s.id} s={s} topicId={id} minN={r.min_n} onChanged={res.reload} />
+            ))}
+          </section>
+        );
+      })}
 
       {sum.n_answered > 0 && <Understanding topicId={id} initial={r.my_understanding} />}
 
