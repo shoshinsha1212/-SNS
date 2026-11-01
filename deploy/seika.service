@@ -1,0 +1,65 @@
+# /etc/systemd/system/seika.service
+#
+# 成果型SNS を ConoHa VPS で常駐させる設定（systemd）。
+# 同じサーバーの献立サイト（kondate.service）と同じ作りにそろえてある。
+#   - サーバーが再起動しても自動で立ち上がる
+#   - アプリが落ちても3秒後に起こし直す
+#
+[Unit]
+Description=seika-sns (FastAPI)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=seika
+Group=seika
+# current は「いま動かす版」への目印。切り替えはこれを付け替えて再起動するだけ
+WorkingDirectory=/srv/seika/current/backend
+# DATABASE_URL（Neon）と ADMIN_KEY。root だけが読めるファイルに置き、systemd が読み込んで渡す
+EnvironmentFile=/srv/seika/shared/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+# libpq は既定でホームの ~/.postgresql/ と ~/.pgpass を見に行くが、ProtectHome で読めず接続に失敗する。
+# どれも使わないので、存在しない場所を指しておく
+Environment=PGSSLCERT=/nonexistent/postgresql.crt
+Environment=PGSSLKEY=/nonexistent/postgresql.key
+Environment=PGPASSFILE=/nonexistent/pgpass
+# 外から直接は受けない。表の窓口は Caddy（HTTPS）
+ExecStart=/srv/seika/current/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --proxy-headers
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+LimitNOFILE=65536
+
+# ── メモリの上限（サーバーは 2GB + スワップ 2GB を献立サイトと分け合う）──
+MemoryHigh=300M
+MemoryMax=450M
+
+# ── 乗っ取られても被害を閉じ込める ──
+# データは Neon にあるので、このサーバーに書く場所は要らない
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/srv/seika
+UMask=0077
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+PrivateDevices=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
