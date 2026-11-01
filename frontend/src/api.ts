@@ -19,6 +19,20 @@ function safeSet(store: Storage, key: string, value: string | null) {
   }
 }
 
+// テスター用の配布 URL（?t=トークン）で開かれたら、その参加者として保存し、URL からは消す
+(() => {
+  try {
+    const url = new URL(window.location.href);
+    const t = url.searchParams.get("t");
+    if (!t) return;
+    safeSet(localStorage, TOKEN_KEY, t);
+    url.searchParams.delete("t");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+  } catch {
+    /* URL を読めない環境では何もしない */
+  }
+})();
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
