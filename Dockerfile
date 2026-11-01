@@ -41,5 +41,6 @@ RUN mkdir -p /app/backend/data
 # Expose port
 EXPOSE 8000
 
-# Run uvicorn server with dynamic PORT support
-CMD ["sh", "-c", "uv run uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Run uvicorn server with dynamic PORT support.
+# Call the venv directly: `uv run` would re-sync dev dependencies on every cold start.
+CMD ["sh", "-c", "/app/backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

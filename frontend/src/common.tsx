@@ -25,11 +25,26 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[]) {
   return { data, error, reload: () => setTick((t) => t + 1), setData };
 }
 
+/** 無料サーバーはしばらく使われないと止まり、起こすのに最大1分ほどかかる。長引いたらそれを伝える。 */
+const SLOW_MS = 4000;
+
 export function Loading({ error }: { error?: string | null }) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setSlow(true), SLOW_MS);
+    return () => window.clearTimeout(t);
+  }, []);
   if (error) return <div className="card error">{error}</div>;
   return (
     <div className="loading" role="status">
-      <span className="spinner" aria-hidden /> 読み込み中…
+      <div className="row center">
+        <span className="spinner" aria-hidden /> 読み込み中…
+      </div>
+      {slow && (
+        <p className="small muted">
+          サーバーを起動しています。しばらく使われていなかったため、表示まで最大1分ほどかかります。このままお待ちください。
+        </p>
+      )}
     </div>
   );
 }
