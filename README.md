@@ -1,87 +1,36 @@
-# 成果型SNS / 合意形成プラットフォーム（Polis × 原体験・追体験）
+# 成果型SNS
 
-> **「立場の違い」を可視化し、生の声（原体験）から未来の合意点（架け橋）を共創するコレクティブ・インテリジェンス・プラットフォーム**
+社会の議題に賛成・反対で答えると、自分が多数派か少数派か、反対側の人の理由と体験談が分かる。
+3つの議題に答えると、4つの軸の「価値観マップ」が完成する。行動はすべて計測し、管理画面で漏斗として見る。
 
-Polis（台湾 vTaiwan や Polis Japan などで活用される合意形成アルゴリズム）の合意・分断可視化手法をベースに、「なぜその意見に至ったのか」という個人の**原体験（エピソード・シナリオ）**を結びつける新しいシビックテック・プラットフォームです。
+依頼書（何を確かめるためのものか）は [brief.md](brief.md)。
 
----
+## 画面
+| パス | 内容 |
+|---|---|
+| `/` | 議題一覧と価値観マップの進み具合 |
+| `/t/:id` | 論点に1問ずつ答える（理由のひとこと・論点の追加） |
+| `/t/:id/results` | みんなの結果、反対側の理由と体験談、理解度の1問 |
+| `/map` | 価値観マップ（1議題で途中経過、3議題で完成） |
+| `/new` | 議題を作る（タイトル＋論点3つから） |
+| `/admin` | 管理画面：計測（漏斗・離脱位置・再訪・理解度）、通報、価値観の軸の紐づけ |
 
-## 🌟 主な機能・特徴
+## 構成
+- `backend/`：FastAPI + SQLAlchemy。`app/values.py` に価値観の軸と初期議題、`app/metrics.py` に集計。
+- `frontend/`：React + Vite + TypeScript。
+- 本番は `Dockerfile` で両方をまとめて Render にデプロイする。
 
-1. **ポリス風スワイプ投票**
-   - 140字の論点（Statement）に対して「賛成」「反対」「パス」で直感的に投票。
-   - カラフルでスマートフォンに最適化されたUI。
-2. **PCA・クラスタリングによる意見マップ**
-   - 参加者の投票傾向を主成分分析（PCA）で2次元に縮約し、k-means++で自動グルーピング。
-   - 誰がどの意見グループに属しているか、インタラクティブな散布図で可視化。
-3. **立場依存度（PD: Position Dependence）分析**
-   - 各論点が「特定の立場（属性・世代・職種など）」にどれだけ偏っているかをL2正則化ロジスティック回帰＆順列検定で統計的に算出。
-4. **境界人（Boundary Crosser）のハイライト**
-   - 異なるグループの共通点を見出している橋渡し的な投票行動をとる参加者を発見。
-5. **原体験（ストーリー）との紐付け**
-   - 過去の失敗談や現場での生々しい体験談を追体験し、数字の裏にある「人間の想い」を理解。
-6. **AI合意形成レポートの自動生成**
-   - 全体合意点、立場間ギャップ、橋渡し論点、価値観の対立構造を整理したバージョン管理レポート（`v1.0`, `v1.1`...）を自動コンパイル。
+## 環境変数
+| 名前 | 用途 |
+|---|---|
+| `DATABASE_URL` | Postgres の接続 URL（Neon など）。未設定なら `backend/data/seika.db`（SQLite） |
+| `ADMIN_KEY` | 管理画面の合言葉。未設定なら管理画面は使えない |
 
----
-
-## 🛠️ システム構成
-
-- **フロントエンド**: React 18 + TypeScript + Vite + Tailwind CSS / Modern CSS
-- **バックエンド**: Python 3.12 + FastAPI + SQLite / PostgreSQL (SQLAlchemy)
-- **統計・分析エンジン**: NumPy / SciPy（SVDによる2D PCA、k-means++、シルエット係数、L2ロジスティック回帰、カイ二乗検定、ハンガリアンアルゴリズム）
-- **デプロイ**: Docker（マルチステージビルドによる単一コンテナ稼働） / Render Blueprint 対応
-
----
-
-## 🚀 ローカル起動方法
-
-### 1. 前提条件
-- Node.js 18+
-- Python 3.11+
-
-### 2. バックエンドの起動
+## 手元で動かす
 ```bash
-cd backend
-python -m venv .venv
-# Windows
-.\.venv\Scripts\activate
-# Mac / Linux
-source .venv/bin/activate
-
-pip install -e .
-python -m app.seed  # 初期サンプルデータ生成
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+cd backend && uv sync && ADMIN_KEY=local-admin uv run uvicorn app.main:app --port 8000
 ```
-
-### 3. フロントエンドの起動
 ```bash
-cd frontend
-npm install
-npm run dev
+cd frontend && npm install && npm run dev
 ```
-ブラウザで `http://localhost:5173` にアクセスします。
-
----
-
-## ☁️ デプロイ（Render / Docker）
-
-本リポジトリは単一の Dockerfile でフロントエンドのビルド成果物を FastAPI から直接静的ファイルとして配信できるよう構成されています。
-
-### Render へのデプロイ
-1. Render（https://render.com）にログインし、「Blueprints」から本リポジトリを選択。
-2. `render.yaml` が自動検知され、数分で Web サービスとして公開されます。
-
----
-
-## 📚 ドキュメント
-
-詳細な設計書および仕様は [`docs/`](docs/README.md) をご参照ください：
-- [00. 要件定義書](docs/00_要件定義書.md)
-- [01. データモデル](docs/01_データモデル.md)
-- [02. アルゴリズム仕様](docs/02_アルゴリズム.md)
-- [03. AIパイプライン](docs/03_AIパイプライン.md)
-- [04. プライバシーと不正対策](docs/04_プライバシーと不正対策.md)
-- [05. システム構成とMVP](docs/05_システム構成とMVP.md)
-- [06. API仕様](docs/06_API仕様.md)
-- [07. 画面設計・機能仕様書](docs/07_画面設計・機能仕様書.md)
+テスト：`cd backend && uv run pytest`

@@ -1,240 +1,116 @@
-"""ORMモデル。docs/01_データモデル.md に対応（MVPのため ID は整数）。"""
+"""テーブル定義。
+
+参加者は端末に保存したトークンだけで識別する（ログインなし）。
+価値観の軸そのものはコード（values.py）に置き、論点には軸のキーと向きだけを持たせる。
+"""
+
+from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import (
-    JSON,
-    Boolean,
-    DateTime,
-    Float,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
-)
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
 
 
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+def now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
-    handle: Mapped[str] = mapped_column(String(50))
     token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    device_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
-    trust_level: Mapped[int] = mapped_column(Integer, default=1)
-    is_synthetic: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    attributes: Mapped[list["UserAttribute"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
-
-
-class UserAttribute(Base):
-    __tablename__ = "user_attributes"
-    __table_args__ = (UniqueConstraint("user_id", "key"),)
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    key: Mapped[str] = mapped_column(String(50))
-    value: Mapped[str] = mapped_column(String(100))
-    verification: Mapped[str] = mapped_column(String(20), default="self")
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    user: Mapped[User] = relationship(back_populates="attributes")
+    # 任意の属性。未回答は None
+    age_band: Mapped[str | None] = mapped_column(String(16))
+    is_student: Mapped[bool | None] = mapped_column()
+    profile_asked: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Topic(Base):
     __tablename__ = "topics"
     id: Mapped[int] = mapped_column(primary_key=True)
-    title: Mapped[str] = mapped_column(String(200))
+    title: Mapped[str] = mapped_column(String(80))
     description: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(String(20), default="open")
-    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    axes: Mapped[list["PositionAxis"]] = relationship(
-        back_populates="topic", order_by="PositionAxis.order", cascade="all, delete-orphan"
-    )
-
-
-class PositionAxis(Base):
-    __tablename__ = "position_axes"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), index=True)
-    name: Mapped[str] = mapped_column(String(100))
-    source: Mapped[str] = mapped_column(String(20), default="admin")
-    order: Mapped[int] = mapped_column(Integer, default=0)
-    topic: Mapped[Topic] = relationship(back_populates="axes")
-    options: Mapped[list["PositionOption"]] = relationship(
-        back_populates="axis", order_by="PositionOption.id", cascade="all, delete-orphan"
-    )
-
-
-class PositionOption(Base):
-    __tablename__ = "position_options"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    axis_id: Mapped[int] = mapped_column(ForeignKey("position_axes.id"), index=True)
-    label: Mapped[str] = mapped_column(String(100))
-    axis: Mapped[PositionAxis] = relationship(back_populates="options")
-
-
-class UserTopicPosition(Base):
-    """立場の履歴。valid_to が NULL のものが現在の立場。"""
-
-    __tablename__ = "user_topic_positions"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), index=True)
-    axis_id: Mapped[int] = mapped_column(ForeignKey("position_axes.id"))
-    option_id: Mapped[int] = mapped_column(ForeignKey("position_options.id"))
-    valid_from: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    valid_to: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    author_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    origin: Mapped[str] = mapped_column(String(8), default="user")  # seed | user
+    hidden: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Statement(Base):
     __tablename__ = "statements"
     id: Mapped[int] = mapped_column(primary_key=True)
     topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), index=True)
-    author_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    body: Mapped[str] = mapped_column(String(200))
-    origin: Mapped[str] = mapped_column(String(30), default="user")
-    status: Mapped[str] = mapped_column(String(20), default="active")
-    merged_into: Mapped[int | None] = mapped_column(ForeignKey("statements.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    body: Mapped[str] = mapped_column(String(140))
+    author_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    origin: Mapped[str] = mapped_column(String(8), default="user")
+    # 賛成したときに軸のどちら側へ寄るか：+1 なら右側、-1 なら左側。軸が無ければマップに使わない
+    axis_key: Mapped[str | None] = mapped_column(String(16))
+    direction: Mapped[int | None] = mapped_column(Integer)
+    hidden: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
-class VoteEvent(Base):
-    """投票は上書きせずイベントとして保存。ユーザー×原則の最新が現在の票。"""
-
-    __tablename__ = "vote_events"
+class Vote(Base):
+    __tablename__ = "votes"
+    __table_args__ = (UniqueConstraint("user_id", "statement_id"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     statement_id: Mapped[int] = mapped_column(ForeignKey("statements.id"), index=True)
     topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), index=True)
-    value: Mapped[int] = mapped_column(Integer)
-    position_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    value: Mapped[int] = mapped_column(Integer)  # 1 賛成 / -1 反対 / 0 わからない
+    reason: Mapped[str | None] = mapped_column(String(80))
+    reason_hidden: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Story(Base):
     __tablename__ = "stories"
     id: Mapped[int] = mapped_column(primary_key=True)
-    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), index=True)
-    kind: Mapped[str] = mapped_column(String(10), default="past")
-    body: Mapped[str] = mapped_column(Text)
-    summary: Mapped[str] = mapped_column(String(200), default="")
-    anonymization: Mapped[str] = mapped_column(String(30), default="none")
-    position_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-
-class StoryStatementLink(Base):
-    __tablename__ = "story_statement_links"
-    __table_args__ = (UniqueConstraint("story_id", "statement_id"),)
-    id: Mapped[int] = mapped_column(primary_key=True)
-    story_id: Mapped[int] = mapped_column(ForeignKey("stories.id"), index=True)
     statement_id: Mapped[int] = mapped_column(ForeignKey("statements.id"), index=True)
-    stance: Mapped[str] = mapped_column(String(10), default="supports")
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    body: Mapped[str] = mapped_column(String(400))
+    stance: Mapped[int] = mapped_column(Integer)  # 投稿時点の本人の答え
+    hidden: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
-class StoryReaction(Base):
-    __tablename__ = "story_reactions"
-    __table_args__ = (UniqueConstraint("user_id", "story_id", "kind"),)
+class Flag(Base):
+    """通報。target_type は topic / statement / reason（=Vote）/ story。"""
+
+    __tablename__ = "flags"
+    __table_args__ = (UniqueConstraint("user_id", "target_type", "target_id"),)
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    story_id: Mapped[int] = mapped_column(ForeignKey("stories.id"), index=True)
-    kind: Mapped[str] = mapped_column(String(12))
-    position_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    target_type: Mapped[str] = mapped_column(String(12))
+    target_id: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
-class AnalysisSnapshot(Base):
-    __tablename__ = "analysis_snapshots"
+class Understanding(Base):
+    """議題の最後の1問「反対側の考えが前より理解できた」（1〜5）。"""
+
+    __tablename__ = "understandings"
+    __table_args__ = (UniqueConstraint("user_id", "topic_id"),)
     id: Mapped[int] = mapped_column(primary_key=True)
-    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), index=True)
-    computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    last_vote_event_id: Mapped[int] = mapped_column(Integer, default=0)
-    params: Mapped[dict] = mapped_column(JSON, default=dict)
-    # クラスターの中心・代表原則・トピック全体の立場依存度などの付随情報
-    meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"))
+    score: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
-class StatementStats(Base):
-    __tablename__ = "statement_stats"
+class Event(Base):
+    """行動計測。漏斗・離脱・再訪はすべてここから集計する。"""
+
+    __tablename__ = "events"
     id: Mapped[int] = mapped_column(primary_key=True)
-    snapshot_id: Mapped[int] = mapped_column(ForeignKey("analysis_snapshots.id"), index=True)
-    statement_id: Mapped[int] = mapped_column(ForeignKey("statements.id"), index=True)
-    n_seen: Mapped[int] = mapped_column(Integer, default=0)
-    n_agree: Mapped[int] = mapped_column(Integer, default=0)
-    n_disagree: Mapped[int] = mapped_column(Integer, default=0)
-    n_pass: Mapped[int] = mapped_column(Integer, default=0)
-    gic: Mapped[float | None] = mapped_column(Float, nullable=True)
-    pd: Mapped[float | None] = mapped_column(Float, nullable=True)
-    pd_by_dimension: Mapped[dict] = mapped_column(JSON, default=dict)
-    gap: Mapped[float | None] = mapped_column(Float, nullable=True)
-    gap_dimension: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    p_value: Mapped[float | None] = mapped_column(Float, nullable=True)
-    q_value: Mapped[float | None] = mapped_column(Float, nullable=True)
-    section: Mapped[str] = mapped_column(String(20), default="undecided")
-
-
-class GroupStats(Base):
-    __tablename__ = "group_stats"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    snapshot_id: Mapped[int] = mapped_column(ForeignKey("analysis_snapshots.id"), index=True)
-    statement_id: Mapped[int] = mapped_column(ForeignKey("statements.id"), index=True)
-    group_type: Mapped[str] = mapped_column(String(10))  # cluster / position
-    dimension: Mapped[str] = mapped_column(String(50))  # cluster の場合は "cluster"
-    group_key: Mapped[str] = mapped_column(String(100))
-    n_seen: Mapped[int] = mapped_column(Integer, default=0)
-    n_agree: Mapped[int] = mapped_column(Integer, default=0)
-    n_disagree: Mapped[int] = mapped_column(Integer, default=0)
-
-
-class UserProjection(Base):
-    __tablename__ = "user_projections"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    snapshot_id: Mapped[int] = mapped_column(ForeignKey("analysis_snapshots.id"), index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    x: Mapped[float] = mapped_column(Float)
-    y: Mapped[float] = mapped_column(Float)
-    cluster_id: Mapped[int] = mapped_column(Integer)
-
-
-class ReportVersion(Base):
-    __tablename__ = "report_versions"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), index=True)
-    version: Mapped[str] = mapped_column(String(20))
-    snapshot_id: Mapped[int] = mapped_column(ForeignKey("analysis_snapshots.id"))
-    body_md: Mapped[str] = mapped_column(Text)
-    generator: Mapped[str] = mapped_column(String(10), default="template")
-    sections: Mapped[dict] = mapped_column(JSON, default=dict)
-    diff: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-
-class ReportCitation(Base):
-    __tablename__ = "report_citations"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    report_version_id: Mapped[int] = mapped_column(ForeignKey("report_versions.id"), index=True)
-    section_key: Mapped[str] = mapped_column(String(20))
-    ref_type: Mapped[str] = mapped_column(String(10))
-    ref_id: Mapped[int] = mapped_column(Integer)
-
-
-class Contribution(Base):
-    __tablename__ = "contributions"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    report_version_id: Mapped[int] = mapped_column(ForeignKey("report_versions.id"), index=True)
-    kind: Mapped[str] = mapped_column(String(20))
-    ref_type: Mapped[str] = mapped_column(String(10))
-    ref_id: Mapped[int] = mapped_column(Integer)
-    weight: Mapped[float] = mapped_column(Float, default=1.0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(32), index=True)
+    topic_id: Mapped[int | None] = mapped_column(Integer)
+    statement_id: Mapped[int | None] = mapped_column(Integer)
+    value: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)

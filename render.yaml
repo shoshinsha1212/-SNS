@@ -8,7 +8,10 @@ services:
     envVars:
       - key: PORT
         value: 8000
+      # 公開前に必須：Neon などの Postgres の接続 URL を Render の管理画面で設定する。
+      # 未設定だとコンテナ内の SQLite を使い、再デプロイのたびにデータが消える。
       - key: DATABASE_URL
-        value: sqlite:////app/backend/data/seika.db
-      - key: OPENAI_API_KEY
-        sync: false # 必要に応じてRenderの管理画面で設定
+        sync: false
+      # 管理画面（/admin）の合言葉。未設定なら管理画面は使えない
+      - key: ADMIN_KEY
+        sync: false

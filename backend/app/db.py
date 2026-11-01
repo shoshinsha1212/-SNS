@@ -1,4 +1,4 @@
-"""データベース接続。既定は SQLite（DATABASE_URL で PostgreSQL などに切り替え可能）。"""
+"""データベース接続。手元は SQLite、本番は DATABASE_URL で Postgres（Neon など）に切り替える。"""
 
 import os
 from pathlib import Path
@@ -8,7 +8,17 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 _DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "seika.db"
-DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{_DEFAULT_DB.as_posix()}")
+
+
+def _normalize(url: str) -> str:
+    # Neon などが渡す postgres:// / postgresql:// を psycopg 3 のドライバ指定に揃える
+    for prefix in ("postgres://", "postgresql://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
+DATABASE_URL = _normalize(os.environ.get("DATABASE_URL") or f"sqlite:///{_DEFAULT_DB.as_posix()}")
 
 _is_sqlite = DATABASE_URL.startswith("sqlite")
 _is_memory = ":memory:" in DATABASE_URL
@@ -19,6 +29,7 @@ engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False} if _is_sqlite else {},
     poolclass=StaticPool if (_is_sqlite and _is_memory) else None,
+    pool_pre_ping=not _is_sqlite,
 )
 
 if _is_sqlite:
@@ -27,7 +38,6 @@ if _is_sqlite:
     def _sqlite_pragmas(dbapi_conn, _):  # pragma: no cover - 接続設定のみ
         cur = dbapi_conn.cursor()
         cur.execute("PRAGMA foreign_keys=ON")
-        cur.execute("PRAGMA journal_mode=WAL")
         cur.close()
 
 
@@ -47,14 +57,14 @@ def get_db():
 
 
 def init_db() -> None:
-    from sqlalchemy import text
     from . import models  # noqa: F401  モデルを登録するため
 
     Base.metadata.create_all(engine)
-    if _is_sqlite and not _is_memory:
-        with engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE users ADD COLUMN device_id VARCHAR(64)"))
-                conn.commit()
-            except Exception:
-                pass
+
+
+def reset_db() -> None:
+    """テスト用：全テーブルを作り直す。"""
+    from . import models  # noqa: F401
+
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
