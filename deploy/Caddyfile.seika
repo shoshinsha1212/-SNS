@@ -1,0 +1,32 @@
+
+# ── 成果型SNS（seika.service、127.0.0.1:8001）──
+# 献立サイトと同じ作り。DuckDNS の無料サブドメインに Caddy が HTTPS の証明書を取る。
+# 置き場所：/etc/caddy/Caddyfile の末尾（deploy/Caddyfile.seika から足したもの）
+agorus.duckdns.org {
+	encode zstd gzip
+
+	# 受けるのは回答・体験談・議題（数KB）だけ
+	request_body {
+		max_size 1MB
+	}
+
+	reverse_proxy 127.0.0.1:8001
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Content-Security-Policy "frame-ancestors 'none'"
+		-Server
+	}
+
+	# IPアドレスは個人情報にあたるので、14日（336時間）で消す
+	log {
+		output file /var/log/caddy/seika-access.log {
+			roll_size 50mb
+			roll_keep 5
+			roll_keep_for 336h
+		}
+	}
+}
