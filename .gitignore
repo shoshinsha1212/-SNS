@@ -11,6 +11,10 @@ backend/data/*.db-wal
 backend/data/*.db-shm
 .pytest_cache/
 
+# 接続文字列などの秘密情報
+.env
+.env.*
+
 # Node
 frontend/node_modules/
 frontend/dist/
