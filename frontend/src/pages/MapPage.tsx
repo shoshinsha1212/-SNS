@@ -70,7 +70,7 @@ export default function MapPage() {
     track("share");
     try {
       if (navigator.share) {
-        await navigator.share({ title: "成果型SNS 価値観マップ", text, url });
+        await navigator.share({ title: "Agorus 価値観マップ", text, url });
         setShared("共有しました");
       } else {
         await navigator.clipboard.writeText(`${text} ${url}`);

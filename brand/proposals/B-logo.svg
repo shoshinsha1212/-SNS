@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 64" width="200" height="64">
+  <!-- B「重なる吹き出し」：賛成（緑）と反対（赤）の声が重なるところ（青）が Agorus -->
+  <style>.t{fill:#1f2328;font:700 30px "Inter","Helvetica Neue","Hiragino Sans","Yu Gothic UI",Arial,sans-serif;letter-spacing:-0.5px}@media (prefers-color-scheme:dark){.t{fill:#e6edf3}}</style>
+  <path d="M12 40 L7 55 L23 45 Z" fill="#1f8a5b"/>
+  <path d="M52 40 L57 55 L41 45 Z" fill="#c2463d"/>
+  <circle cx="25" cy="29" r="17" fill="#1f8a5b"/>
+  <circle cx="39" cy="29" r="17" fill="#c2463d"/>
+  <path d="M32 13.51 A17 17 0 0 1 32 44.49 A17 17 0 0 1 32 13.51 Z" fill="#2f5bd3"/>
+  <text class="t" x="76" y="43">Agorus</text>
+</svg>
