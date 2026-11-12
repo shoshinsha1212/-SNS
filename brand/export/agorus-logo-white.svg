@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 64" width="200" height="64">
+  <defs><clipPath id="bar"><rect x="17" y="36" width="30" height="8" rx="4"/></clipPath></defs>
+  <path d="M13 55 L32 9 L51 55" fill="none" stroke="#2f5bd3" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <g clip-path="url(#bar)">
+    <rect x="17" y="36" width="15" height="8" fill="#1f8a5b"/>
+    <rect x="32" y="36" width="5" height="8" fill="#8a8f98"/>
+    <rect x="37" y="36" width="10" height="8" fill="#c2463d"/>
+  </g>
+  <text fill="#ffffff" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-weight="700" font-size="30" letter-spacing="-0.5" x="76" y="43">Agorus</text>
+</svg>
