@@ -620,12 +620,25 @@ def seed_all_pool_topics(target_url: str, personas: List[Dict[str, Any]]) -> int
 
 
 def run_simulation(args):
-    personas = load_personas()
-    log(f"=== Agorus E2E シミュレーション開始 (モード: {args.mode}) ===")
-    log(f"対象URL: {args.target}")
-
     # 開発サーバーの起動確認
     proc_b, proc_f = ensure_dev_servers_running(args.target)
+
+    # 2〜4日ごとの回答者自律成長（5〜10名増加）チェック
+    try:
+        from testers.persona_growth import check_and_grow_respondents, load_growth_state
+        newly_joined = check_and_grow_respondents(target_url=args.target, force=args.grow_now)
+        if newly_joined:
+            log(f"🎉 【コミュニティ成長】2〜4日サイクルにより、新しく {len(newly_joined)} 名の回答者が合流しました！")
+        else:
+            state = load_growth_state()
+            log(f"回答者成長ステータス: 前回追加 {state.get('last_growth_date')} / 次回追加まで残り約 {state.get('next_interval_days')} 日間隔")
+    except Exception as e:
+        newly_joined = []
+        log(f"回答者成長チェックのスキップ: {e}")
+
+    personas = load_personas()
+    log(f"=== Agorus E2E シミュレーション開始 (モード: {args.mode}) ===")
+    log(f"対象URL: {args.target} (登録回答者総数: {len(personas)} 名)")
 
     # 一括シードモードが指定された場合
     if args.seed_all_topics:
@@ -651,12 +664,18 @@ def run_simulation(args):
         delay_factor = 1.0
         spread_seconds = 0
         log(f"単一実行モード: ID {p_id} のペルソナを実行します。")
-    else:  # daily モード (毎日70%)
+    else:  # daily モード (毎日約70%活動)
         target_count = int(len(personas) * (args.active_rate / 100.0))
-        active_personas = random.sample(personas, target_count)
+        # 本日新しく参加した回答者は優先的に活動メンバーに含める
+        new_ids = {p["id"] for p in newly_joined}
+        veteran_pool = [p for p in personas if p["id"] not in new_ids]
+        sampled_veterans = random.sample(veteran_pool, min(len(veteran_pool), max(0, target_count - len(newly_joined))))
+        active_personas = newly_joined + sampled_veterans
+        random.shuffle(active_personas)
+
         delay_factor = 1.0
         spread_seconds = args.spread_hours * 3600
-        log(f"日次モード: 100名中 {len(active_personas)}名 (約{args.active_rate}%) を抽出しました。")
+        log(f"日次モード: {len(personas)}名中 {len(active_personas)}名 (約{args.active_rate}%) を抽出しました。")
         if spread_seconds > 0:
             interval_sec = spread_seconds / len(active_personas)
             log(f"時間分散: {args.spread_hours} 時間にわたって実行します（ペルソナ間の平均待機時間: 約 {interval_sec/60:.1f} 分）。")
@@ -740,6 +759,7 @@ def main():
     parser.add_argument("--user-id", type=int, default=1, help="singleモード時のペルソナID (1〜100)")
     parser.add_argument("--topics-per-user", type=int, default=1, help="1人あたり回答する議題数 (既定: 1)")
     parser.add_argument("--create-topics", type=int, default=None, help="本セッションでペルソナが新規投稿する最大議題数 (既定: なし=上限を設定せず各々自発的に追加)")
+    parser.add_argument("--grow-now", action="store_true", help="間隔日数を待たずに今すぐ新規回答者（5〜10名）を追加する")
     parser.add_argument("--seed-all-topics", action="store_true", help="22個の追加議題プールを今すぐAPIで一括作成する")
     parser.add_argument("--spread-hours", type=float, default=0.0, help="分散時間（時間単位。0なら即時連続実行）")
     parser.add_argument("--headed", action="store_true", help="ブラウザ画面を表示して実行する")
